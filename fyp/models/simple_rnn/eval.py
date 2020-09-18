@@ -2,13 +2,13 @@
 import os
 from dotenv import load_dotenv
 import torch
-import numpy as np
 import matplotlib.pyplot as plt
-from pytorch_lightning.loggers import CometLogger
+import matplotlib.image as mpimg
 
 
 from fyp.models.simple_rnn.model import SimpleRNNCaptioner
 from fyp.data.flickr8k import Flickr8kDataModule
+
 os.chdir("/home/michael/Documents/fyp")
 
 load_dotenv()
@@ -19,34 +19,52 @@ data.prepare_data()
 data.setup()
 
 model = SimpleRNNCaptioner.load_from_checkpoint(
-    "models/simple_rnn/final-year-project/1855a56dcb4a425cb11bb33346b94b9c/checkpoints/epoch=6.ckpt",
+    "wandb/run-20200918_145707-103u8og0/files/final-year-project/103u8og0/checkpoints/epoch=2.ckpt",
 )
 model.cuda()
 model.eval()
 
 # %%
-dataloader = data.val_dataloader()
+dataloader = data.test_dataloader()
 
-features, captions, lengths, targets = iter(dataloader).next()
+iterable = iter(dataloader)
+iterable.next()
+iterable.next()
+iterable.next()
+features, captions, lengths, targets, files = iterable.next()
+
+
+def pad_sequence(tokens):
+    token_list = list(tokens)
+    while len(token_list) < 20:
+        token_list.insert(0, 0)
+    return torch.as_tensor(token_list)
+
 
 def generate_desc(feature):
-    caption = "<s>"
+    caption = [3]
     max_length = 20
     for i in range(max_length):
-        encoded = data.encoder.encode(caption)
+        encoded = pad_sequence(caption)
         encoded = encoded.unsqueeze(0)
         output = model(feature.cuda(), encoded.cuda(), None)
         output = output.squeeze(0)
         idx = torch.argmax(output)
-        word = data.encoder.decode([int(output[idx])])
-        caption += ' ' + word
+        caption.append(idx)
 
-        if word == "<end>":
+        if idx == 2:
             break
-    return caption
+    return data.encoder.decode(caption)
 
 
-for feature in features.split(1):
-    print(feature[0, :2])
+fig = plt.figure()
+for i, (feature, file) in enumerate(zip(features.split(1), files)):
     description = generate_desc(feature)
-    print(description)
+
+    ax = fig.add_subplot(len(files) // 3 + 1, 3, i+1)
+    img = mpimg.imread("data/processed/flickr8k/images/" + file)
+    plt.imshow(img)
+
+    ax.set_xlabel(description)
+
+plt.show()

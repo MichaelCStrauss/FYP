@@ -36,7 +36,7 @@ class Flickr8kDataset(Dataset):
             self.labels.append(caption)
 
         self.encoder = torchnlp.encoders.text.WhitespaceEncoder(
-            self.labels, append_eos=True, min_occurrences=1
+            self.labels, append_eos=True, min_occurrences=3
         )
 
         def spaces(x: str):
@@ -92,7 +92,7 @@ class Flickr8kDataset(Dataset):
             features = torch.load(os.path.join(self.features_dir, file + ".pt"))
             self.feature_cache[file] = features
         tokens = torch.tensor(caption)
-        return features, tokens, length, target
+        return features, tokens, length, target, file
 
 
 class Flickr8kDataModule(pl.LightningDataModule):
@@ -106,9 +106,11 @@ class Flickr8kDataModule(pl.LightningDataModule):
         resnet = torch.hub.load(
             "pytorch/vision:v0.6.0", "resnet50", pretrained=True
         )
-        resnet = torch.nn.Sequential(*(list(resnet.children())[:-1]))
+        resnet.eval()
+        features = torch.nn.Sequential(*(list(resnet.children())[:-1]))
+        features.eval()
 
-        return resnet
+        return features, resnet
 
     def prepare_data(self):
         if not os.path.exists(os.path.join(self.processed_dir, "labels.txt")):
@@ -116,9 +118,9 @@ class Flickr8kDataModule(pl.LightningDataModule):
             unzip()
 
         if not os.path.exists(os.path.join(self.processed_dir, "features")):
-            model = self.get_feature_model()
+            features, resnet = self.get_feature_model()
 
-            save_features(model, Flickr8kDataset.load_image)
+            save_features(features, None, Flickr8kDataset.load_image)
 
     def setup(self, stage=None):
 
@@ -141,7 +143,7 @@ class Flickr8kDataModule(pl.LightningDataModule):
         return DataLoader(self.val, batch_size=32)
 
     def test_dataloader(self):
-        return DataLoader(self.test, batch_size=32)
+        return DataLoader(self.test, batch_size=8)
 
 
 if __name__ == "__main__":

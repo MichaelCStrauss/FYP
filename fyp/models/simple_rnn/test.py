@@ -20,7 +20,7 @@ data.prepare_data()
 data.setup()
 
 model = SimpleRNNCaptioner.load_from_checkpoint(
-    "models/simple_rnn/final-year-project/1855a56dcb4a425cb11bb33346b94b9c/checkpoints/epoch=6.ckpt",
+    "wandb/latest-run/files/final-year-project/2ivxtvdy/checkpoints/epoch=7.ckpt",
 )
 model.cuda()
 model.eval()

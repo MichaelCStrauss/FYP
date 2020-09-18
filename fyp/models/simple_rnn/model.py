@@ -13,21 +13,21 @@ class SimpleRNNCaptioner(pl.LightningModule):
         self.feature_count = 2048
         self.embedding_dim = 256
 
-        self.features_dropout = nn.Dropout(0.2)
+        self.features_dropout = nn.Dropout(0.0)
         self.features_dense = nn.Linear(self.feature_count, self.embedding_dim)
 
         self.embedding = nn.Embedding(vocab_size, 256)
-        self.embedding_drop = nn.Dropout(0.2)
+        self.embedding_drop = nn.Dropout(0.5)
         self.text_encoder = nn.GRU(
             input_size=self.embedding_dim,
             hidden_size=self.embedding_dim,
-            num_layers=3,
-            dropout=0.1,
+            num_layers=1,
             batch_first=True,
         )
 
-        self.decoder1 = nn.Linear(self.embedding_dim, 512)
-        self.decoder2 = nn.Linear(512, vocab_size)
+        self.decoder1 = nn.Linear(self.embedding_dim * 2, self.embedding_dim)
+        self.decoder1_activation = nn.ReLU()
+        self.decoder2 = nn.Linear(self.embedding_dim, vocab_size)
 
     # def setup(self, stage):
     #     self.logger.experiment.add_tags(["captioning", "simple-rnn", "flickr8k"])
@@ -43,9 +43,10 @@ class SimpleRNNCaptioner(pl.LightningModule):
         captions, _ = self.text_encoder(captions)
         captions = captions[:, -1]
 
-        decoder = features + captions
+        decoder = torch.cat([captions, features], dim=1)
 
         decoder = self.decoder1(decoder)
+        decoder = self.decoder1_activation(decoder)
         decoder = self.decoder2(decoder)
 
         return decoder
@@ -53,26 +54,20 @@ class SimpleRNNCaptioner(pl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.Adam(
             self.parameters(),
-            lr=(self.learning_rate if self.learning_rate is not None else 1e-3),
+            lr=(self.learning_rate if self.learning_rate is not None else 5e-4),
         )
 
     def training_step(self, batch, batch_idx):
-        features, captions, lengths, targets = batch
+        features, captions, lengths, targets, _ = batch
 
         y_hat = self(features, captions, lengths)
 
         loss = F.cross_entropy(y_hat, targets)
 
-        result = pl.TrainResult(minimize=loss)
-
-        result.log(
-            "train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
-        )
-
-        return result
+        return {"loss": loss, "log": {"train_loss": loss}}
 
     def validation_step(self, batch, batch_idx):
-        features, captions, lengths, targets = batch
+        features, captions, lengths, targets, _ = batch
 
         y_hat = self(features, captions, lengths)
 
