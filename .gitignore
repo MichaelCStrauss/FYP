@@ -90,3 +90,5 @@ target/
 
 
 /models/
+outputs/
+wandb/
