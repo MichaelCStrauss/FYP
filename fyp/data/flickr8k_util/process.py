@@ -6,8 +6,10 @@ from fyp.data.flickr8k_util.download import label_path, data_path
 import zipfile
 import shutil
 import json
-class_idx = json.load(open("imagenet_class_index.json"))
+
+class_idx = json.load(open("data/imagenet_class_index.json"))
 idx2label = [class_idx[str(k)][1] for k in range(len(class_idx))]
+
 
 def unzip():
     logger.info("Extracting flickr8k files")
@@ -27,7 +29,7 @@ def unzip():
     )
 
 
-def save_features(feature_model, classification_model, to_tensor):
+def save_features_resnet(feature_model, classification_model, to_tensor):
     out_path = "data/processed/flickr8k/features/"
     os.mkdir(out_path)
     path = "data/processed/flickr8k/images"
@@ -45,10 +47,21 @@ def save_features(feature_model, classification_model, to_tensor):
                 classification = torch.nn.functional.softmax(classification, dim=0)
                 classification = torch.argmax(classification)
                 label = idx2label[classification]
-                print(f'{file=}, {label=}')
+                print(f"{file=}, {label=}")
         features = features.reshape((-1,))
         torch.save(features.cpu(), os.path.join(out_path, file + ".pt"))
 
 
+def save_features_detectron(model, cfg):
+    out_path = "data/processed/flickr8k/features/"
+    os.mkdir(out_path)
+    path = "data/processed/flickr8k/images"
+
+    for file in tqdm(os.listdir(path)):
+        full_path = os.path.join(path, file)
+        features = model(full_path)
+        torch.save(features.cpu(), os.path.join(out_path, file + ".pt"))
+
+
 if __name__ == "__main__":
-    save_features()
+    save_features_detectron()
