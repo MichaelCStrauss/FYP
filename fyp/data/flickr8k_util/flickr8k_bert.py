@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 import os
 import torch
 from transformers import BertTokenizerFast
+import torch.nn.functional as F
 
 
 class Flickr8kBertDataset(Dataset):
@@ -11,6 +12,7 @@ class Flickr8kBertDataset(Dataset):
         labels_file: str,
         features_dir: str,
         masked_language_model: bool = False,
+        padded_image_length: int = 20,
     ):
         self.images_dir = images_dir
         self.features_dir = features_dir
@@ -39,17 +41,27 @@ class Flickr8kBertDataset(Dataset):
             # tokens = self.tokenizer(caption)
             self.examples.append((file, caption))
 
+        self.feature_cache = {}
+        self.padded_image_length = padded_image_length
+
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, i):
         file, caption = self.examples[i]
 
-        # features = None
-        # if file in self.feature_cache:
-        #     features = self.feature_cache[file]
-        # else:
-        #     features = torch.load(os.path.join(self.features_dir, file + ".pt"))
-        #     self.feature_cache[file] = features
-        # tokens = torch.tensor(caption)
-        return caption
+        features = None
+        if file in self.feature_cache:
+            features = self.feature_cache[file]
+        else:
+            features = torch.load(os.path.join(self.features_dir, file + ".pt"))
+            self.feature_cache[file] = features
+
+        num_features = features.shape[0]
+        pad_amount = self.padded_image_length - num_features
+        features = F.pad(features, (0, 0, 0, pad_amount))
+
+        mask = torch.ones((self.padded_image_length,))
+        mask[num_features:] = 0
+
+        return caption, features, mask
