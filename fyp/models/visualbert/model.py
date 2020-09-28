@@ -3,29 +3,30 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 import transformers
-from transformers import DistilBertTokenizerFast, DistilBertForMaskedLM, DistilBertModel
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 
 class VisualBERT(pl.LightningModule):
-    def __init__(self):
+    def __init__(self, learning_rate: float = None):
         super().__init__()
 
         # Utils
-        self.learning_rate = None
+        self.learning_rate = learning_rate
+        self.save_hyperparameters()
         self.uniform = torch.distributions.Uniform(0, 1)
 
         # Base BERT model
-        self.tokenizer = DistilBertTokenizerFast.from_pretrained(
-            "distilbert-base-uncased"
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            "google/bert_uncased_L-4_H-512_A-8"
         )
-        self.bert = DistilBertForMaskedLM.from_pretrained("distilbert-base-uncased").to(
-            self.device
+        self.bert = AutoModelForMaskedLM.from_pretrained(
+            "google/bert_uncased_L-4_H-512_A-8"
         )
 
         # Embeddings
         self.text_embedding = self.bert.get_input_embeddings()
         self.feature_dimensions = 1024
-        self.hidden_dimensions = 768
+        self.hidden_dimensions = 512
         self.visual_projection = nn.Linear(
             self.feature_dimensions, self.hidden_dimensions
         )
@@ -87,6 +88,9 @@ class VisualBERT(pl.LightningModule):
             dim=1,
         )
 
+        expanded_embeddings = self.embedding_layer_norm(expanded_embeddings)
+        expanded_embeddings = self.embedding_dropout(expanded_embeddings)
+
         labels = torch.zeros(expanded_embeddings.shape[0:2]).to(self.device)
         labels[:, 0:text_length] = text_labels
         labels[:, text_length:] = -100
@@ -101,6 +105,7 @@ class VisualBERT(pl.LightningModule):
             dim=1,
         )
 
+        # print(f"{masked[0, :]}, {attention_mask[0, :]=}")
         return expanded_embeddings, labels, attention_mask
 
     def forward(self, input_embeddings, attention_mask=None, labels=None):
@@ -122,9 +127,9 @@ class VisualBERT(pl.LightningModule):
         return mask
 
     def configure_optimizers(self):
-        return transformers.AdamW(
+        return torch.optim.Adam(
             self.parameters(),
-            lr=(self.learning_rate if self.learning_rate is not None else 1e-5),
+            lr=(self.learning_rate if self.learning_rate is not None else 5e-6),
         )
 
     def training_step(self, batch, batch_idx):
@@ -143,6 +148,8 @@ class VisualBERT(pl.LightningModule):
         batch_preds = self.tokenizer.decode(
             torch.argmax(logits[labels != -100, :], dim=1).tolist()
         )
+
+        # print(f"{batch_targets=}, {batch_preds=}")
         # predicted_index = torch.argmax(logits, dim=2)
         # first_sentence = masked[0, :].tolist()
         # predicted_first = predicted_index[0, :].tolist()

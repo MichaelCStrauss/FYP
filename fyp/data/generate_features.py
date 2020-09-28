@@ -18,7 +18,8 @@ def create_model():
             "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
         )
     )
-    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5  # set threshold for this model
+    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.7  # set threshold for this model
+    cfg.TEST.DETECTIONS_PER_IMAGE = 5
     cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(
         "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
     )
@@ -84,5 +85,5 @@ def get_features(model, file, cfg):
         feats = box_features[pred_inds]
         instances = pred_instances[0]['instances']
         classes = [labels[i] for i in instances.pred_classes]
-        print(f"{file}: contains {', '.join(classes)}")
+        print(f"{file}: contains {', '.join(classes)}. {feats.shape=}")
         return feats

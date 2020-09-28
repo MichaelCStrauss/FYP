@@ -12,7 +12,7 @@ class Flickr8kBertDataset(Dataset):
         labels_file: str,
         features_dir: str,
         masked_language_model: bool = False,
-        padded_image_length: int = 20,
+        padded_image_length: int = 5,
     ):
         self.images_dir = images_dir
         self.features_dir = features_dir

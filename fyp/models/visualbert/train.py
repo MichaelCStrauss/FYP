@@ -27,7 +27,7 @@ def main(test: bool = False, overfit: float = 0, max_epochs: int = 1000):
 
     if test is not True:
         logger = WandbLogger(
-            project="final-year-project", offline=False, log_model=True
+            project="final-year-project", offline=False, log_model=True, save_dir=work_dir
         )
 
     trainer = pl.Trainer(

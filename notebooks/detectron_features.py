@@ -24,26 +24,13 @@ from torchvision import transforms
 import detectron2.data.transforms as T
 
 # %%
-# img = Image.open("data/processed/flickr8k/images/10815824_2997e03d76.jpg").convert(
-#     "RGB"
-# )
-# preprocess = transforms.Compose(
-#     [
-#         transforms.Resize(256),
-#         transforms.CenterCrop(224),
-#         transforms.ToTensor(),
-#     ]
-# )
-# image = preprocess(img)
-
-
-# %%
 cfg = get_cfg()
 # add project-specific config (e.g., TensorMask) here if you're not running a model in detectron2's core library
 cfg.merge_from_file(
     model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
 )
-cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5  # set threshold for this model
+cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.9  # set threshold for this model
+cfg.TEST.DETECTIONS_PER_IMAGE = 5
 # Find a model from detectron2's model zoo. You can use the https://dl.fbaipublicfiles... url as well
 cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(
     "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
@@ -56,7 +43,7 @@ checkpointer = DetectionCheckpointer(model)
 checkpointer.load(cfg.MODEL.WEIGHTS)
 
 # %%
-image_r = cv2.imread("data/processed/flickr8k/images/10815824_2997e03d76.jpg")
+image_r = cv2.imread("data/processed/flickr8k/images/181157221_e12410ef0b.jpg")
 
 aug = T.ResizeShortestEdge(
     [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
