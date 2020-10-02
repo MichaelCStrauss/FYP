@@ -35,11 +35,7 @@ class Flickr8kBertDataset(Dataset):
             caption: list = tsv[1].strip()
             self.files.append(filename)
             self.labels.append(caption)
-
-        for file, caption in zip(self.files, self.labels):
-            # caption = "[CLS] " + caption + " [SEP]"
-            # tokens = self.tokenizer(caption)
-            self.examples.append((file, caption))
+            self.examples.append((filename, caption))
 
         self.feature_cache = {}
         self.padded_image_length = padded_image_length
