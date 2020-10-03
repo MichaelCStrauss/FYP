@@ -27,7 +27,10 @@ def main(test: bool = False, overfit: float = 0, max_epochs: int = 1000):
 
     if test is not True:
         logger = WandbLogger(
-            project="final-year-project", offline=False, log_model=True, save_dir=work_dir
+            project="final-year-project",
+            offline=False,
+            log_model=True,
+            save_dir=work_dir,
         )
 
     trainer = pl.Trainer(
@@ -37,7 +40,6 @@ def main(test: bool = False, overfit: float = 0, max_epochs: int = 1000):
         row_log_interval=10,
         logger=logger,
         max_epochs=max_epochs,
-        checkpoint_callback=None,
         overfit_batches=overfit,
     )
     trainer.fit(model, data)

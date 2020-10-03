@@ -97,7 +97,7 @@ class Flickr8kDataModule(pl.LightningDataModule):
         return DataLoader(self.train, batch_size=8, num_workers=8)
 
     def val_dataloader(self):
-        return DataLoader(self.val, batch_size=32)
+        return DataLoader(self.val, batch_size=8, num_workers=8)
 
     def test_dataloader(self):
         return DataLoader(self.test, batch_size=8)
