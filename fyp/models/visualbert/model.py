@@ -1,8 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
-import transformers
 import wandb
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 import pytorch_lightning.metrics.functional as metrics
@@ -148,7 +146,8 @@ class VisualBERT(pl.LightningModule):
 
         # [8, N] LongTensor (token ids e.g. 'dog' might be 1000)
         input_ids = batch_encoding.input_ids.to(self.device)
-        # [8, N] FloatTensor, mask for attention use later. 1 for tokens to attend, 0 for padding tokens
+        # [8, N] FloatTensor, mask for attention use later. 1 for tokens to attend,
+        # 0 for padding tokens
         attention_mask = batch_encoding.attention_mask.to(self.device)
 
         # Text masking
@@ -195,8 +194,7 @@ class VisualBERT(pl.LightningModule):
 
     def inference(self, vision_features, vision_mask, max_length):
         """ Greedy search using a language model approach to generate examples. """
-        """ WIP!!!"""
-        caption = "[MASK]"
+        caption = "[CLS] [MASK]."
 
         batch_encoding = self.tokenizer(
             [caption],
@@ -204,18 +202,34 @@ class VisualBERT(pl.LightningModule):
             return_tensors="pt",
             return_special_tokens_mask=True,
             return_attention_mask=True,
+            add_special_tokens=False,
         )
         # [1, N] LongTensor (token ids e.g. 'dog' might be 1000)
         input_ids = batch_encoding.input_ids.to(self.device)
         # [1, N] FloatTensor, mask for attention use later. 1 for tokens to attend
         # , 0 for padding tokens
-        attention_mask = batch_encoding.attention_mask.to(self.device)
+        text_attention_mask = batch_encoding.attention_mask.to(self.device)
 
-        embeddings, attention_mask = self.embeddings(
-            input_ids, attention_mask, vision_features, vision_mask
-        )
+        while input_ids.shape[1] < max_length:
+            print(input_ids)
+            embeddings, attention_mask = self.embeddings(
+                input_ids, text_attention_mask, vision_features, vision_mask
+            )
 
-        logits, _ = self.forward()
+            logits, _ = self.forward(embeddings, attention_mask)
+
+            next_token = torch.argmax(logits[0, -1, :]).unsqueeze(0).unsqueeze(0)
+
+            input_ids = torch.cat(
+                [input_ids[:, :-2], next_token, input_ids[:, -2:]], dim=1
+            )
+            text_attention_mask = torch.cat(
+                [text_attention_mask, torch.ones((1, 1)).to(self.device)], dim=1
+            )
+
+        decoded = self.tokenizer.decode(input_ids.squeeze())
+
+        return decoded
 
     def mask(self, input_tokens, special_tokens, random=True):
         if random:

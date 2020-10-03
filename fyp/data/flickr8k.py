@@ -87,20 +87,20 @@ class Flickr8kDataModule(pl.LightningDataModule):
                 os.path.join(self.processed_dir, "labels.txt"),
                 os.path.join(self.processed_dir, "features"),
             )
-        self.train, self.val, self.test = random_split(
-            full,
-            [len(full) - 1000, 500, 500],
-            generator=torch.Generator().manual_seed(42),
-        )
+
+        # Use a test-train split with different images in the val set
+        final_train_index = len(full) - 1000
+        train_indices = list(range(0, final_train_index))
+        val_indices = list(range(final_train_index, final_train_index + 1000))
+
+        self.train = torch.utils.data.Subset(full, train_indices)
+        self.val = torch.utils.data.Subset(full, val_indices)
 
     def train_dataloader(self):
         return DataLoader(self.train, batch_size=8, num_workers=8)
 
     def val_dataloader(self):
         return DataLoader(self.val, batch_size=8, num_workers=8)
-
-    def test_dataloader(self):
-        return DataLoader(self.test, batch_size=8)
 
 
 if __name__ == "__main__":
