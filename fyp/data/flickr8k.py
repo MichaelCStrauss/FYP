@@ -97,10 +97,10 @@ class Flickr8kDataModule(pl.LightningDataModule):
         self.val = torch.utils.data.Subset(full, val_indices)
 
     def train_dataloader(self):
-        return DataLoader(self.train, batch_size=8, num_workers=8)
+        return DataLoader(self.train, batch_size=8, num_workers=8, shuffle=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val, batch_size=8, num_workers=8)
+        return DataLoader(self.val, batch_size=8, num_workers=8, shuffle=True)
 
 
 if __name__ == "__main__":

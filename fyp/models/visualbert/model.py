@@ -4,6 +4,7 @@ import pytorch_lightning as pl
 import wandb
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 import pytorch_lightning.metrics.functional as metrics
+from .config import VisualBERTConfig, TrainingObjective
 
 
 class VisionLanguageEmbeddings(nn.Module):
@@ -28,6 +29,8 @@ class VisionLanguageEmbeddings(nn.Module):
     ):
         # Let N be the padded sequence length e.g. if the longest string pre-tokenizing
         # was 15 tokens long, N=17 (one start token, one end token)
+        if mask_indices is None:
+            mask_indices = torch.zeros_like(input_ids) == 1
 
         # Don't mask the original input_ids as it is used for labels later
         # [8, N]
@@ -94,7 +97,7 @@ class VisionLanguageEmbeddings(nn.Module):
 
 
 class VisualBERT(pl.LightningModule):
-    def __init__(self, learning_rate: float = None):
+    def __init__(self, config: VisualBERTConfig, learning_rate: float = None):
         super().__init__()
 
         # Utils
@@ -102,18 +105,11 @@ class VisualBERT(pl.LightningModule):
         self.save_hyperparameters()
         self.uniform = torch.distributions.Uniform(0, 1)
 
-        # Base BERT model
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "google/bert_uncased_L-4_H-512_A-8"
-            # "bert-base-uncased"
-        )
-        self.bert = AutoModelForMaskedLM.from_pretrained(
-            "google/bert_uncased_L-4_H-512_A-8"
-            # "bert-base-uncased"
-        )
-        self.bert.train()
+        self.training_objective = config.training_objective
+        self.tokenizer = config.tokenizer
+        self.bert = config.bert_model
 
-        self.hidden_dimensions = 512
+        self.hidden_dimensions = config.hidden_size
         self.embeddings = VisionLanguageEmbeddings(
             self.hidden_dimensions, self.bert.get_input_embeddings()
         )
@@ -121,7 +117,7 @@ class VisualBERT(pl.LightningModule):
     def setup(self, stage):
         pass
 
-    def prepare_inputs_train(self, captions, features, vision_mask):
+    def prepare_inputs_mlm(self, captions, features, vision_mask):
         # Transform a batch of captions and a batch of features into
         # model inputs, including mask
 
@@ -172,29 +168,106 @@ class VisualBERT(pl.LightningModule):
         # otherwise BERT gets angry
         labels = torch.zeros(embeddings.shape[0:2]).to(self.device)
         # The first N tokens are the same as previously computed
-        labels[:, 0:text_length] = text_labels
+        labels[:, -text_length:] = text_labels
         # No prediction to be made on the vision tokens, so let it be -100
-        labels[:, text_length:] = -100
+        labels[:, :-text_length] = -100
+        labels = labels.long()
+
+        return embeddings, attention_mask, labels
+
+    def shift_labels(self, labels):
+        """Shift labels, which include vision labels as -100, to be
+        targets for CLM."""
+        skip = (labels[0, :] == -100).sum().item()
+        shifted_labels = labels[:, skip + 1 :].contiguous()
+        return shifted_labels
+
+    def prepare_inputs_clm(self, captions, features, vision_mask):
+        # Transform a batch of captions and a batch of features into
+        # model inputs, including mask
+
+        #
+        # Text
+        #
+
+        # Convert a 8-tuple of strings to an 8-element list of strings
+        captions = list(captions)
+
+        # Use the pre-trained weights from BERT for the text to begin with
+        # These are adjusted by gradient descent
+
+        # Tokenize the strings and include padding
+        batch_encoding = self.tokenizer(
+            captions,
+            padding=True,
+            return_tensors="pt",
+            return_special_tokens_mask=True,
+            return_attention_mask=True,
+        )
+
+        # [8, N] LongTensor (token ids e.g. 'dog' might be 1000)
+        input_ids = batch_encoding.input_ids.to(self.device)
+        # [8, N] FloatTensor, mask for attention use later. 1 for tokens to attend,
+        # 0 for padding tokens
+        attention_mask = batch_encoding.attention_mask.to(self.device)
+
+        embeddings, attention_mask = self.embeddings(
+            input_ids, attention_mask, features, vision_mask
+        )
+
+        # Prep the labels for loss
+        # Make sure the shape is right: [8, N+6]
+        # otherwise BERT gets angry
+        text_length = input_ids.shape[1]
+        labels = torch.zeros(embeddings.shape[0:2]).to(self.device)
+        # The first N tokens are the same as previously computed
+        labels[:, -text_length:] = input_ids
+        # No prediction to be made on the vision tokens, so let it be -100
+        labels[:, :-text_length] = -100
         labels = labels.long()
 
         return embeddings, attention_mask, labels
 
     def forward(self, embeddings, attention_mask, labels=None):
-        output = self.bert(
-            inputs_embeds=embeddings,
-            labels=labels,
-            return_dict=True,
-            attention_mask=attention_mask,
-        )
+        if self.training_objective == TrainingObjective.MaskedLanguageModelling:
+            output = self.bert(
+                inputs_embeds=embeddings,
+                labels=labels,
+                return_dict=True,
+                attention_mask=attention_mask,
+            )
 
-        logits = output.logits
-        loss = output.loss
+            logits = output.logits
+            loss = output.loss
 
-        return logits, loss
+            return logits, loss
+
+        elif self.training_objective == TrainingObjective.Captioning:
+            output = self.bert(
+                inputs_embeds=embeddings,
+                return_dict=True,
+                attention_mask=attention_mask,
+            )
+
+            logits = output.logits
+            loss = None
+            if labels is not None:
+                # we are doing next-token prediction;
+                # shift prediction scores and input ids by one
+                skip = (labels[0, :] == -100).sum().item()
+                shifted_logits = logits[:, skip:-1, :].contiguous()
+                shifted_labels = self.shift_labels(labels)
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(
+                    shifted_logits.view(-1, self.bert.config.vocab_size),
+                    shifted_labels.view(-1),
+                )
+
+            return logits, loss
 
     def inference(self, vision_features, vision_mask, max_length):
         """ Greedy search using a language model approach to generate examples. """
-        caption = "[CLS] [MASK]."
+        caption = "[CLS]"
 
         batch_encoding = self.tokenizer(
             [caption],
@@ -210,8 +283,7 @@ class VisualBERT(pl.LightningModule):
         # , 0 for padding tokens
         text_attention_mask = batch_encoding.attention_mask.to(self.device)
 
-        while input_ids.shape[1] < max_length:
-            print(input_ids)
+        while input_ids.shape[1] < max_length and input_ids[0, -1].item() != 102:
             embeddings, attention_mask = self.embeddings(
                 input_ids, text_attention_mask, vision_features, vision_mask
             )
@@ -220,9 +292,7 @@ class VisualBERT(pl.LightningModule):
 
             next_token = torch.argmax(logits[0, -1, :]).unsqueeze(0).unsqueeze(0)
 
-            input_ids = torch.cat(
-                [input_ids[:, :-2], next_token, input_ids[:, -2:]], dim=1
-            )
+            input_ids = torch.cat([input_ids, next_token], dim=1)
             text_attention_mask = torch.cat(
                 [text_attention_mask, torch.ones((1, 1)).to(self.device)], dim=1
             )
@@ -249,40 +319,71 @@ class VisualBERT(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_idx):
-        caption, features, vision_mask = batch
+        caption, features, vision_mask, _ = batch
 
-        input_embeddings, attention_mask, labels = self.prepare_inputs_train(
-            caption, features, vision_mask
-        )
+        if self.training_objective == TrainingObjective.MaskedLanguageModelling:
+            input_embeddings, attention_mask, labels = self.prepare_inputs_mlm(
+                caption, features, vision_mask
+            )
+            targets = labels[labels != -100]
 
-        logits, loss = self(input_embeddings, attention_mask, labels)
+            logits, loss = self(input_embeddings, attention_mask, labels)
 
-        targets = labels[labels != -100]
-        predictions = torch.argmax(logits[labels != -100, :], dim=1)
+            predictions = torch.argmax(logits[labels != -100, :], dim=1)
+
+        elif self.training_objective == TrainingObjective.Captioning:
+            input_embeddings, attention_mask, labels = self.prepare_inputs_clm(
+                caption, features, vision_mask
+            )
+            targets = self.shift_labels(labels).view(-1)
+
+            logits, loss = self(input_embeddings, attention_mask, labels)
+
+            skip = (labels[0, :] == -100).sum().item()
+            shifted_logits = logits[:, skip:-1, :].contiguous()
+
+            predictions = torch.argmax(shifted_logits, dim=2).view(-1)
 
         accuracy = metrics.accuracy(predictions, targets)
-        # print(f"{batch_targets=}, {batch_preds=}")
+        # print(f"{predictions=}, {targets=}")
 
         result = pl.TrainResult(minimize=loss)
 
         result.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
         result.log("epoch_train_loss", loss, on_step=False, on_epoch=True)
-        result.log("train_accuracy", accuracy, on_step=True, on_epoch=True)
+        result.log(
+            "train_accuracy", accuracy, on_step=True, on_epoch=True, prog_bar=True
+        )
 
         return result
 
     def validation_step(self, batch, batch_idx):
-        caption, features, vision_mask = batch
+        caption, features, vision_mask, _ = batch
 
-        input_embeddings, attention_mask, labels = self.prepare_inputs_train(
-            caption, features, vision_mask
-        )
+        if self.training_objective == TrainingObjective.MaskedLanguageModelling:
+            input_embeddings, attention_mask, labels = self.prepare_inputs_mlm(
+                caption, features, vision_mask
+            )
+            targets = labels[labels != -100]
 
-        logits, loss = self(input_embeddings, attention_mask, labels)
+            logits, loss = self(input_embeddings, attention_mask, labels)
 
-        targets = labels[labels != -100]
-        predictions = torch.argmax(logits[labels != -100, :], dim=1)
+            predictions = torch.argmax(logits[labels != -100, :], dim=1)
 
+        elif self.training_objective == TrainingObjective.Captioning:
+            input_embeddings, attention_mask, labels = self.prepare_inputs_clm(
+                caption, features, vision_mask
+            )
+            targets = self.shift_labels(labels).view(-1)
+
+            logits, loss = self(input_embeddings, attention_mask, labels)
+
+            skip = (labels[0, :] == -100).sum().item()
+            shifted_logits = logits[:, skip:-1, :].contiguous()
+
+            predictions = torch.argmax(shifted_logits, dim=2).view(-1)
+
+        accuracy = metrics.accuracy(predictions, targets)
         table_data = [
             [
                 self.tokenizer.decode(p.tolist()),

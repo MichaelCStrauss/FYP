@@ -18,7 +18,7 @@ data.prepare_data()
 data.setup()
 
 model = VisualBERT.load_from_checkpoint(
-    "models/visualbert/wandb/latest-run/files/final-year-project/2h193tcx/checkpoints/epoch=8.ckpt",
+    "models/visualbert/wandb/latest-run/files/final-year-project/11un49jp/checkpoints/epoch=9.ckpt",
 )
 model.cuda()
 model.eval()
@@ -27,16 +27,23 @@ model.eval()
 dataloader = data.val_dataloader()
 
 iterable = iter(dataloader)
-targets, batch_features, vision_masks = next(iterable)
 
-target, features, vision_mask = (
-    targets[0],
-    batch_features.split(1)[0],
-    vision_masks.split(1)[0],
-)
 
-generated = model.inference(features.to('cuda'), vision_mask.to('cuda'), 20)
+batch = next(iterable)
+targets, batch_features, vision_masks, filenames = batch
 
-print(f"{generated=}, {target=}")
+fig = plt.figure()
+for i, (target, features, vision_mask, file) in enumerate(
+    zip(targets, batch_features.split(1), vision_masks.split(1), filenames)
+):
+    generated = model.inference(features.to("cuda"), vision_mask.to("cuda"), 20)
+    ax = fig.add_subplot(len(filenames) // 3 + 1, 3, i + 1)
+    img = mpimg.imread("data/processed/flickr8k/images/" + file)
+    plt.imshow(img)
+
+    ax.set_xlabel(generated)
+
+    print(f"{generated=}, {target=}")
+plt.show()
 
 # %%

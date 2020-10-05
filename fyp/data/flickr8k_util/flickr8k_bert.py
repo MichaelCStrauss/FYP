@@ -60,4 +60,4 @@ class Flickr8kBertDataset(Dataset):
         mask = torch.ones((self.padded_image_length,))
         mask[num_features:] = 0
 
-        return caption, features, mask
+        return caption, features, mask, file
