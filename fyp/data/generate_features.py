@@ -82,6 +82,8 @@ def get_features(model, file, cfg):
             pred_instances, inputs, images.image_sizes
         )  # scale box to orig size
         # features of the proposed boxes
+        print(pred_inds)
+        print(box_features.shape)
         feats = box_features[pred_inds]
         instances = pred_instances[0]['instances']
         classes = [labels[i] for i in instances.pred_classes]

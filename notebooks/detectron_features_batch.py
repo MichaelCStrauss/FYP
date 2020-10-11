@@ -43,12 +43,23 @@ checkpointer = DetectionCheckpointer(model)
 checkpointer.load(cfg.MODEL.WEIGHTS)
 
 # %%
-image_r = cv2.imread("data/processed/coco/train2017/000000000192.jpg")
+image_pil = Image.open("data/processed/coco/train2017/000000000192.jpg")
+
+preprocess = transforms.Compose(
+    [
+        transforms.Resize((512, 512)),
+        transforms.ToTensor(),
+    ]
+)
+image_tensor = preprocess(image_pil) * 255
+
+image_tensor = image_tensor.permute((1, 2, 0)).flip(2)
 
 aug = T.ResizeShortestEdge(
     [cfg.INPUT.MIN_SIZE_TEST, cfg.INPUT.MIN_SIZE_TEST], cfg.INPUT.MAX_SIZE_TEST
 )
 
+image_r = image_tensor.numpy()
 image = aug.get_transform(image_r).apply_image(image_r)
 image = torch.as_tensor(image_r.astype("float32").transpose(2, 0, 1))
 height, width = image_r.shape[:2]
@@ -57,14 +68,27 @@ inputs = [{"image": image, "height": height, "width": width}]
 # plt.imshow(image.permute(1, 2, 0).numpy()[:, :, ::-1] / 255.0)
 
 # %%
+image_pil2 = Image.open("data/processed/coco/train2017/000000209046.jpg")
+image_pil2 = Image.open("data/processed/coco/train2017/000000000192.jpg")
+image_tensor2 = preprocess(image_pil2) * 255
+
+image_tensor2 = image_tensor2.permute((1, 2, 0)).flip(2)
+image_r = image_tensor2.numpy()
+image2 = aug.get_transform(image_r).apply_image(image_r)
+image2 = torch.as_tensor(image_r.astype("float32").transpose(2, 0, 1))
+height, width = image_r.shape[:2]
+
+inputs.append({"image": image2, "height": height, "width": width})
+
+# %%
 with torch.no_grad():
     images = model.preprocess_image(inputs)  # don't forget to preprocess
     features = model.backbone(images.tensor)  # set of cnn features
     proposals, _ = model.proposal_generator(images, features, None)  # RPN
 
     features_ = [features[f] for f in model.roi_heads.box_in_features]
-    box_features = model.roi_heads.box_pooler(features_, [x.proposal_boxes for x in proposals])
-    box_features = model.roi_heads.box_head(box_features)  # features of all 1k candidates
+    box_features_pool = model.roi_heads.box_pooler(features_, [x.proposal_boxes for x in proposals])
+    box_features = model.roi_heads.box_head(box_features_pool)  # features of all 1k candidates
     predictions = model.roi_heads.box_predictor(box_features)
     pred_instances, pred_inds = model.roi_heads.box_predictor.inference(predictions, proposals)
     pred_instances = model.roi_heads.forward_with_given_boxes(features, pred_instances)
@@ -72,13 +96,22 @@ with torch.no_grad():
     # output boxes, masks, scores, etc
     pred_instances = model._postprocess(pred_instances, inputs, images.image_sizes)  # scale box to orig size
     # features of the proposed boxes
-    feats = box_features[pred_inds]
-    print(feats.shape)
-    print(pred_instances)
+    # feats = box_features[pred_inds]
+    # print(feats.shape)
     # print(feats.shape)
     v = Visualizer(
         image_r[:, :, ::-1], MetadataCatalog.get(cfg.DATASETS.TRAIN[0]), scale=1.2
     )
-    out = v.draw_instance_predictions(pred_instances[0]["instances"].to("cpu"))
+    out = v.draw_instance_predictions(pred_instances[1]["instances"].to("cpu"))
     plt.imshow(cv2.cvtColor(out.get_image()[:, :, ::-1], cv2.COLOR_BGR2RGB))
+
+    for i, img_inds in enumerate(pred_inds):
+        print(img_inds)
+        inds = img_inds + 1000 * i
+        print(inds)
+        feats = box_features[inds]
+        print(feats)
+# %%
+print(pred_instances[1])
+
 # %%
