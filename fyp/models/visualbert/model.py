@@ -117,6 +117,16 @@ class VisualBERT(pl.LightningModule):
     def setup(self, stage):
         pass
 
+    def split_captions(self, features, vision_mask, caption_sets):
+        num_captions_per_sample = len(caption_sets)
+        batch_size = features.shape[0]
+        features = features.repeat(num_captions_per_sample, 1, 1)
+        vision_mask = vision_mask.repeat(num_captions_per_sample, 1)
+        caption_sets = [
+            c[i] for c in caption_sets for i in range(batch_size)
+        ]
+        return features, vision_mask, caption_sets
+
     def prepare_inputs_mlm(self, captions, features, vision_mask):
         # Transform a batch of captions and a batch of features into
         # model inputs, including mask
@@ -319,7 +329,10 @@ class VisualBERT(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_idx):
-        caption, features, vision_mask, _ = batch
+        features, mask, caption_sets = batch
+        features, vision_mask, caption = self.split_captions(
+            features, mask, caption_sets
+        )
 
         if self.training_objective == TrainingObjective.MaskedLanguageModelling:
             input_embeddings, attention_mask, labels = self.prepare_inputs_mlm(
@@ -358,7 +371,10 @@ class VisualBERT(pl.LightningModule):
         return result
 
     def validation_step(self, batch, batch_idx):
-        caption, features, vision_mask, _ = batch
+        features, mask, caption_sets = batch
+        features, vision_mask, caption = self.split_captions(
+            features, mask, caption_sets
+        )
 
         if self.training_objective == TrainingObjective.MaskedLanguageModelling:
             input_embeddings, attention_mask, labels = self.prepare_inputs_mlm(

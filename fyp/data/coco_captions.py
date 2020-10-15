@@ -1,10 +1,42 @@
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Dataset, random_split
 import pytorch_lightning as pl
 import os
 import torch
-from PIL import Image
 import torchvision.transforms as transforms
-from enum import Enum
+import torch.nn.functional as F
+
+
+class CocoCaptionsDataset(Dataset):
+    def __init__(self, features_directory: str, captions_directory: str):
+        self.feature_length = 8
+        self.captions_length = 5
+        self.features_directory = features_directory
+        self.captions_directory = captions_directory
+
+        self.file_list = os.listdir(features_directory)
+
+    def __len__(self):
+        return len(self.file_list)
+
+    def __getitem__(self, index):
+        f_path = os.path.join(self.features_directory, self.file_list[index])
+        features = torch.load(f_path)
+        captions = torch.load(
+            os.path.join(self.captions_directory, self.file_list[index])
+        )
+        while len(captions) < self.captions_length:
+            captions.append(None)
+        captions = captions[:5]
+
+        num_features = features.shape[0]
+        pad_amount = self.feature_length - num_features
+        features = F.pad(features, (0, 0, 0, pad_amount))
+
+        mask = torch.ones((self.feature_length,))
+        mask[num_features:] = 0
+
+        return features, mask, captions
+
 
 class CocoCaptions(pl.LightningDataModule):
     def __init__(self):
@@ -17,74 +49,54 @@ class CocoCaptions(pl.LightningDataModule):
     def load_image(image):
         preprocess = transforms.Compose(
             [
-                transforms.Resize(512),
+                transforms.Resize((512, 512)),
                 transforms.ToTensor(),
             ]
         )
         image_tensor = preprocess(image)
 
-        rotated = image_tensor[:, :, ::-1]
+        image_tensor = image_tensor.permute((1, 2, 0)).flip(2) * 255
 
-        return rotated
-
-    def get_feature_model(self):
-        if self.type == DatasetType.LanguageModel:
-            resnet = torch.hub.load(
-                "pytorch/vision:v0.6.0", "resnet50", pretrained=True
-            )
-            resnet.eval()
-            features = torch.nn.Sequential(*(list(resnet.children())[:-1]))
-            features.eval()
-            return features, resnet
-        else:
-            self.model, self.cfg = create_model()
-
-            self.run_model = lambda file: get_features(self.model, file, self.cfg)
-
-            return self.model, self.cfg
+        return image_tensor
 
     def prepare_data(self):
-        if not os.path.exists(os.path.join(self.processed_dir, "labels.txt")):
-            download()
-            unzip()
-
-        if not os.path.exists(os.path.join(self.processed_dir, "features")):
-            _, _ = self.get_feature_model()
-
-            save_features_detectron(self.run_model, self.cfg)
+        pass
 
     def setup(self, stage=None):
+        self.dataset = CocoCaptionsDataset(
+            features_directory=self.processed_dir + "/features",
+            captions_directory=self.processed_dir + "/captions",
+        )
 
-        if self.type == DatasetType.LanguageModel:
-            full = Flickr8kLMDataset(
-                os.path.join(self.processed_dir, "images"),
-                os.path.join(self.processed_dir, "labels.txt"),
-                os.path.join(self.processed_dir, "features"),
-            )
-            self.encoder = full.encoder
-        elif self.type == DatasetType.MaskedLanguageModel:
-            full = Flickr8kBertDataset(
-                os.path.join(self.processed_dir, "images"),
-                os.path.join(self.processed_dir, "labels.txt"),
-                os.path.join(self.processed_dir, "features"),
-            )
-
-        # Use a test-train split with different images in the val set
-        final_train_index = len(full) - 1000
-        train_indices = list(range(0, final_train_index))
-        val_indices = list(range(final_train_index, final_train_index + 1000))
-
-        self.train = torch.utils.data.Subset(full, train_indices)
-        self.val = torch.utils.data.Subset(full, val_indices)
+        train_length = int(len(self.dataset) * 0.92)
+        val_length = len(self.dataset) - train_length
+        self.train, self.val = random_split(
+            self.dataset,
+            [train_length, val_length],
+            generator=torch.Generator().manual_seed(42),
+        )
 
     def train_dataloader(self):
         return DataLoader(self.train, batch_size=8, num_workers=8, shuffle=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val, batch_size=8, num_workers=8, shuffle=True)
+        return DataLoader(self.val, batch_size=8, num_workers=8, shuffle=False)
 
 
 if __name__ == "__main__":
-    datamodule = Flickr8kDataModule(DatasetType.MaskedLanguageModel)
-    datamodule.prepare_data()
-    datamodule.setup()
+    data = CocoCaptions()
+    data.setup()
+
+    loader = data.train_dataloader()
+
+    print("iter")
+    it = iter(loader)
+    print("iter done")
+    features, mask, captions = next(it)
+
+    print(features.shape)
+    print(mask.shape)
+    features, mask, captions = next(it)
+
+    print(features.shape)
+    print(mask.shape)

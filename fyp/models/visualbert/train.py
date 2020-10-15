@@ -2,6 +2,7 @@
 import typer
 import os
 
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from transformers import (
@@ -12,7 +13,7 @@ from transformers import (
 )
 
 from fyp.models.visualbert.model import VisualBERT
-from fyp.data.flickr8k import Flickr8kDataModule, DatasetType
+from fyp.data.coco_captions import CocoCaptions
 from fyp.models.visualbert.config import VisualBERTConfig, TrainingObjective
 
 work_dir = "models/visualbert"
@@ -44,7 +45,7 @@ def main(
         c.is_decoder = True
         config.bert_model = AutoModelForCausalLM.from_config(c)
 
-    data = Flickr8kDataModule(DatasetType.MaskedLanguageModel)
+    data = CocoCaptions()
     data.prepare_data()
     data.setup()
 
