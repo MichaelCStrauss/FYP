@@ -177,7 +177,7 @@ class VisualBERT(pl.LightningModule):
         # Make sure the shape is right: [8, N+6]
         # otherwise BERT gets angry
         labels = torch.zeros(embeddings.shape[0:2]).to(self.device)
-        # The first N tokens are the same as previously computed
+        # The last N tokens are the same as previously computed
         labels[:, -text_length:] = text_labels
         # No prediction to be made on the vision tokens, so let it be -100
         labels[:, :-text_length] = -100
@@ -230,7 +230,7 @@ class VisualBERT(pl.LightningModule):
         # otherwise BERT gets angry
         text_length = input_ids.shape[1]
         labels = torch.zeros(embeddings.shape[0:2]).to(self.device)
-        # The first N tokens are the same as previously computed
+        # The last N tokens are the same as previously computed
         labels[:, -text_length:] = input_ids
         # No prediction to be made on the vision tokens, so let it be -100
         labels[:, :-text_length] = -100

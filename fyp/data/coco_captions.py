@@ -14,6 +14,17 @@ class CocoCaptionsDataset(Dataset):
         self.captions_directory = captions_directory
 
         self.file_list = os.listdir(features_directory)
+    
+    @staticmethod
+    def postprocess_features(features, feature_length):
+        num_features = features.shape[0]
+        pad_amount = feature_length - num_features
+        features = F.pad(features, (0, 0, 0, pad_amount))
+
+        mask = torch.ones((feature_length,))
+        mask[num_features:] = 0
+
+        return features, mask
 
     def __len__(self):
         return len(self.file_list)
@@ -28,12 +39,7 @@ class CocoCaptionsDataset(Dataset):
             captions.append(None)
         captions = captions[:5]
 
-        num_features = features.shape[0]
-        pad_amount = self.feature_length - num_features
-        features = F.pad(features, (0, 0, 0, pad_amount))
-
-        mask = torch.ones((self.feature_length,))
-        mask[num_features:] = 0
+        features, mask = self.postprocess_features(features, self.feature_length)
 
         return features, mask, captions
 

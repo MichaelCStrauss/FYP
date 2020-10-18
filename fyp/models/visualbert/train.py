@@ -15,6 +15,7 @@ from transformers import (
 from fyp.models.visualbert.model import VisualBERT
 from fyp.data.coco_captions import CocoCaptions
 from fyp.models.visualbert.config import VisualBERTConfig, TrainingObjective
+from fyp.models.utils.checkpoint_n_steps import CheckpointEveryNSteps
 
 work_dir = "models/visualbert"
 
@@ -26,6 +27,7 @@ def main(
     test: bool = False,
     overfit: float = 0,
     max_epochs: int = 1000,
+    checkpoint: str = None,
 ):
 
     config: VisualBERTConfig = VisualBERTConfig()
@@ -45,11 +47,14 @@ def main(
         c.is_decoder = True
         config.bert_model = AutoModelForCausalLM.from_config(c)
 
+    if checkpoint is None:
+        model = VisualBERT(config)
+    else:
+        model = VisualBERT.load_from_checkpoint(checkpoint, config=config)
+
     data = CocoCaptions()
     data.prepare_data()
     data.setup()
-
-    model = VisualBERT(config)
 
     logger = None
 
@@ -63,6 +68,8 @@ def main(
             save_dir=work_dir,
         )
 
+    callbacks = [CheckpointEveryNSteps(3000)]
+
     trainer = pl.Trainer(
         gpus=1,
         fast_dev_run=fast_dev_run,
@@ -71,6 +78,7 @@ def main(
         logger=logger,
         max_epochs=max_epochs,
         overfit_batches=overfit,
+        callbacks=callbacks
         # check_val_every_n_epoch=1000 if overfit > 0 else 1,
     )
     trainer.fit(model, data)
