@@ -6,6 +6,7 @@ from enum import Enum
 class TrainingObjective(Enum):
     MaskedLanguageModelling = "mlm"
     Captioning = "captioning"
+    Discriminator = "Discriminator"
 
 
 @dataclass(init=False)
