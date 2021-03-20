@@ -6,6 +6,7 @@ from enum import Enum
 class TrainingObjective(Enum):
     MaskedLanguageModelling = "mlm"
     Captioning = "captioning"
+    Discriminator = "Discriminator"
 
 
 @dataclass(init=False)
@@ -15,3 +16,5 @@ class VisualBERTConfig:
     hidden_size: int
 
     training_objective: TrainingObjective
+
+    manual_lm_head: bool = False

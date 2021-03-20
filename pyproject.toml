@@ -10,9 +10,9 @@ typer = "^0.3.2"
 tqdm = "^4.48.2"
 requests = "^2.24.0"
 loguru = "^0.5.2"
-torch = "^1.6.0"
-torchvision = "^0.7.0"
-pytorch-lightning = "^0.9.0"
+torch = {url = "https://download.pytorch.org/whl/cu110/torch-1.7.1%2Bcu110-cp38-cp38-linux_x86_64.whl"}
+torchvision = {url = "https://download.pytorch.org/whl/cu110/torchvision-0.8.2%2Bcu110-cp38-cp38-linux_x86_64.whl"}
+pytorch-lightning = "^1.2.0"
 matplotlib = "^3.3.1"
 opencv-python = "^4.4.0"
 scipy = "^1.5.2"
@@ -21,7 +21,7 @@ pytorch-nlp = "^0.5.0"
 lru-dict = "^1.1.6"
 wandb = "^0.10.1"
 transformers = "^3.2.0"
-detectron2 = {url = "https://dl.fbaipublicfiles.com/detectron2/wheels/cu102/torch1.6/detectron2-0.2.1%2Bcu102-cp38-cp38-linux_x86_64.whl"}
+detectron2 = {url = "https://dl.fbaipublicfiles.com/detectron2/wheels/cu110/torch1.7/detectron2-0.3%2Bcu110-cp38-cp38-linux_x86_64.whl"}
 pandas = "^1.1.2"
 nltk = "^3.5"
 

@@ -16,7 +16,10 @@ def generate_features(
     files = os.listdir("./data/processed/coco/features/")
     indices = [int(file.split(".")[0]) for file in files]
     indices = sorted(indices)
-    last_idx = indices[-1]
+    if len(indices) > 0:
+        last_idx = indices[-1]
+    else:
+        last_idx = 0
     print(f"Starting from index {last_idx=}")
     dataset = torch.utils.data.Subset(dataset, list(range(last_idx, len(dataset))))
 

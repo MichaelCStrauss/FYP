@@ -1,4 +1,5 @@
 # %%
+from fyp.models.visualbert.config import TrainingObjective
 import typer
 import os
 from dotenv import load_dotenv
@@ -16,8 +17,6 @@ import PIL
 import math
 from nltk.translate.bleu_score import sentence_bleu
 from nltk.tokenize import word_tokenize
-
-os.chdir("/home/michael/Documents/fyp")
 
 
 load_dotenv()
@@ -40,8 +39,10 @@ def load_image(image):
 # %%
 def evaluate(image: str = None):
     model = VisualBERT.load_from_checkpoint(
-        "models/visualbert/wandb/run-20201018_115800-1iu84g6m/files/final-year-project/1iu84g6m/checkpoints/epoch=1.ckpt",
+        "models/electra/final-year-project/3osm0cr3/checkpoints/epoch=17-step=231535.ckpt",
+        manual_lm_head=True
     )
+    model.training_objective = TrainingObjective.Captioning
     model.cuda()
     model.eval()
 

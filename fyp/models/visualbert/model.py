@@ -1,9 +1,11 @@
+from collections import namedtuple
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import pytorch_lightning as pl
 import wandb
-from transformers import AutoModelForMaskedLM, AutoTokenizer
 import pytorch_lightning.metrics.functional as metrics
+from transformers.modeling_bert import BertLMPredictionHead
 from .config import VisualBERTConfig, TrainingObjective
 
 
@@ -13,7 +15,7 @@ class VisionLanguageEmbeddings(nn.Module):
         self.device = device
         self.word_embeddings = bert_embeddings
         self.feature_dimensions = 1024
-        self.hidden_dimensions = 512
+        self.hidden_dimensions = hidden_dimensions
         self.visual_projection = nn.Linear(
             self.feature_dimensions, self.hidden_dimensions
         )
@@ -97,7 +99,7 @@ class VisionLanguageEmbeddings(nn.Module):
 
 
 class VisualBERT(pl.LightningModule):
-    def __init__(self, config: VisualBERTConfig, learning_rate: float = None):
+    def __init__(self, config: VisualBERTConfig, learning_rate: float = None, manual_lm_head=False):
         super().__init__()
 
         # Utils
@@ -114,6 +116,20 @@ class VisualBERT(pl.LightningModule):
             self.hidden_dimensions, self.bert.get_input_embeddings()
         )
 
+        self.discriminator = None
+        if config.training_objective == TrainingObjective.Discriminator:
+            self.discriminator = nn.Linear(self.hidden_dimensions, 1)
+
+        self.lm_head = None
+        if config.manual_lm_head or manual_lm_head:
+            self.add_lm_head()
+
+    def add_lm_head(self):
+        self.lm_head = BertLMPredictionHead(self.bert.config)
+        self.lm_head.decoder.weights = (
+            self.bert.get_input_embeddings().weight.transpose(0, 1)
+        )
+
     def setup(self, stage):
         pass
 
@@ -122,9 +138,7 @@ class VisualBERT(pl.LightningModule):
         batch_size = features.shape[0]
         features = features.repeat(num_captions_per_sample, 1, 1)
         vision_mask = vision_mask.repeat(num_captions_per_sample, 1)
-        caption_sets = [
-            c[i] for c in caption_sets for i in range(batch_size)
-        ]
+        caption_sets = [c[i] for c in caption_sets for i in range(batch_size)]
         return features, vision_mask, caption_sets
 
     def prepare_inputs_mlm(self, captions, features, vision_mask):
@@ -154,7 +168,7 @@ class VisualBERT(pl.LightningModule):
         input_ids = batch_encoding.input_ids.to(self.device)
         # [8, N] FloatTensor, mask for attention use later. 1 for tokens to attend,
         # 0 for padding tokens
-        attention_mask = batch_encoding.attention_mask.to(self.device)
+        text_attention_mask = batch_encoding.attention_mask.to(self.device)
 
         # Text masking
         # Produce an [8, N] mask (True indicating tokens to mask)
@@ -163,27 +177,49 @@ class VisualBERT(pl.LightningModule):
         # elements with ID < 0. They use -100 as an example in the docs.
         # This ensures that all the un-masked outputs are not used
         # [8, N]
-        text_labels = input_ids.clone().detach().to(self.device)
-        text_labels[~mask] = -100
+        original_text_labels = input_ids.clone().detach().to(self.device)
+        masked_text_labels = input_ids.clone().detach().to(self.device)
+        masked_text_labels[~mask] = -100
 
         # Useful for later
         text_length = input_ids.shape[1]
 
         embeddings, attention_mask = self.embeddings(
-            input_ids, attention_mask, features, vision_mask, mask
+            input_ids, text_attention_mask, features, vision_mask, mask
         )
 
         # Prep the labels for loss
         # Make sure the shape is right: [8, N+6]
         # otherwise BERT gets angry
-        labels = torch.zeros(embeddings.shape[0:2]).to(self.device)
+        original_labels = torch.zeros(embeddings.shape[0:2]).to(self.device)
         # The last N tokens are the same as previously computed
-        labels[:, -text_length:] = text_labels
         # No prediction to be made on the vision tokens, so let it be -100
-        labels[:, :-text_length] = -100
-        labels = labels.long()
+        original_labels[:, :-text_length] = -100
+        masked_labels = original_labels.clone().detach().to(self.device)
 
-        return embeddings, attention_mask, labels
+        original_labels[:, -text_length:] = original_text_labels
+        masked_labels[:, -text_length:] = masked_text_labels
+
+        original_labels = original_labels.long()
+        masked_labels = masked_labels.long()
+
+        MLMInputs = namedtuple(
+            "MLMInputs",
+            [
+                "embeddings",
+                "attention_mask",
+                "masked_labels",
+                "text_attention_mask",
+                "original_labels",
+            ],
+        )
+        return MLMInputs(
+            embeddings=embeddings,
+            attention_mask=attention_mask,
+            masked_labels=masked_labels,
+            text_attention_mask=text_attention_mask,
+            original_labels=original_labels,
+        )
 
     def shift_labels(self, labels):
         """Shift labels, which include vision labels as -100, to be
@@ -219,10 +255,10 @@ class VisualBERT(pl.LightningModule):
         input_ids = batch_encoding.input_ids.to(self.device)
         # [8, N] FloatTensor, mask for attention use later. 1 for tokens to attend,
         # 0 for padding tokens
-        attention_mask = batch_encoding.attention_mask.to(self.device)
+        text_attention_mask = batch_encoding.attention_mask.to(self.device)
 
         embeddings, attention_mask = self.embeddings(
-            input_ids, attention_mask, features, vision_mask
+            input_ids, text_attention_mask, features, vision_mask
         )
 
         # Prep the labels for loss
@@ -236,7 +272,17 @@ class VisualBERT(pl.LightningModule):
         labels[:, :-text_length] = -100
         labels = labels.long()
 
-        return embeddings, attention_mask, labels
+        return embeddings, attention_mask, labels, text_attention_mask
+
+    def prepare_inputs_discriminator(
+        self, input_ids, text_attention_mask, features, vision_mask
+    ):
+        # Prepare inputs for discriminator training
+        embeddings, attention_mask = self.embeddings(
+            input_ids, text_attention_mask, features, vision_mask
+        )
+
+        return embeddings, attention_mask
 
     def forward(self, embeddings, attention_mask, labels=None):
         if self.training_objective == TrainingObjective.MaskedLanguageModelling:
@@ -259,7 +305,11 @@ class VisualBERT(pl.LightningModule):
                 attention_mask=attention_mask,
             )
 
-            logits = output.logits
+            if self.lm_head is not None:
+                logits = self.lm_head(output.last_hidden_state)
+            else:
+                logits = output.logits
+
             loss = None
             if labels is not None:
                 # we are doing next-token prediction;
@@ -272,6 +322,25 @@ class VisualBERT(pl.LightningModule):
                     shifted_logits.view(-1, self.bert.config.vocab_size),
                     shifted_labels.view(-1),
                 )
+
+            return logits, loss
+
+        elif self.training_objective == TrainingObjective.Discriminator:
+            output = self.bert(
+                inputs_embeds=embeddings,
+                return_dict=True,
+                attention_mask=attention_mask,
+            )
+
+            decoder_outputs = output.last_hidden_state
+
+            outputs = self.discriminator(decoder_outputs).squeeze()
+            logits = F.sigmoid(outputs)
+            flat_logits = logits[(attention_mask.bool()) & (labels != -100)]
+            labels = labels[(attention_mask.bool()) & (labels != -100)]
+
+            loss_fct = nn.BCELoss()
+            loss = loss_fct(flat_logits, labels.float())
 
             return logits, loss
 
@@ -328,26 +397,36 @@ class VisualBERT(pl.LightningModule):
             lr=(self.learning_rate if self.learning_rate is not None else 5e-5),
         )
 
-    def training_step(self, batch, batch_idx):
+    def run_train_batch(self, batch):
+        # Run a training step for the model from a training example from a dataset
+        # Not appropriate for discriminative training
+
         features, mask, caption_sets = batch
         features, vision_mask, caption = self.split_captions(
             features, mask, caption_sets
         )
 
         if self.training_objective == TrainingObjective.MaskedLanguageModelling:
-            input_embeddings, attention_mask, labels = self.prepare_inputs_mlm(
-                caption, features, vision_mask
+            inputs = self.prepare_inputs_mlm(caption, features, vision_mask)
+            targets = inputs.masked_labels[inputs.masked_labels != -100]
+
+            logits, loss = self(
+                inputs.embeddings, inputs.attention_mask, inputs.masked_labels
             )
-            targets = labels[labels != -100]
 
-            logits, loss = self(input_embeddings, attention_mask, labels)
+            predictions = torch.argmax(logits[inputs.masked_labels != -100, :], dim=1)
 
-            predictions = torch.argmax(logits[labels != -100, :], dim=1)
+            text_attention_mask = inputs.text_attention_mask
+            labels = inputs.masked_labels
+            original_labels = inputs.original_labels
 
         elif self.training_objective == TrainingObjective.Captioning:
-            input_embeddings, attention_mask, labels = self.prepare_inputs_clm(
-                caption, features, vision_mask
-            )
+            (
+                input_embeddings,
+                attention_mask,
+                labels,
+                text_attention_mask,
+            ) = self.prepare_inputs_clm(caption, features, vision_mask)
             targets = self.shift_labels(labels).view(-1)
 
             logits, loss = self(input_embeddings, attention_mask, labels)
@@ -357,72 +436,124 @@ class VisualBERT(pl.LightningModule):
 
             predictions = torch.argmax(shifted_logits, dim=2).view(-1)
 
-        accuracy = metrics.accuracy(predictions, targets)
+            original_labels = labels
+
+        # Loss:         Cross entropy loss
+        # Labels:       For MLM: the labels with -100 for unmasked tokens
+        #               For CLM: the unshifted targets
+        # Logits:       Raw BERT logits
+        # Predictions:  argmax'ed/thresholded + shifted logits, for debug purposes
+        # Targets:      Targets that predictions should match
+        # Text attention Mask: The attention masked used for text
+        Output = namedtuple(
+            "Output",
+            [
+                "loss",
+                "logits",
+                "predictions",
+                "targets",
+                "labels",
+                "text_attention_mask",
+                "original_labels",
+            ],
+        )
+        return Output(
+            loss=loss,
+            logits=logits,
+            predictions=predictions,
+            targets=targets,
+            labels=labels,
+            text_attention_mask=text_attention_mask,
+            original_labels=original_labels,
+        )
+
+    def run_train_batch_discriminator(self, batch, generator_outputs):
+        features, mask, caption_sets = batch
+        features, vision_mask, _ = self.split_captions(features, mask, caption_sets)
+
+        generator_text_logits = generator_outputs.logits.clone()
+        generator_captions = torch.argmax(generator_text_logits, dim=2)
+        masked_captions = generator_outputs.labels != -100
+        discriminator_input_captions = generator_outputs.original_labels.clone()
+        discriminator_input_captions[masked_captions] = generator_captions[
+            masked_captions
+        ]
+        discriminator_input_captions = discriminator_input_captions[
+            :, features.shape[1] :
+        ]
+
+        labels = ~masked_captions
+        correct_guesses = generator_captions == generator_outputs.original_labels
+        labels[correct_guesses] = True
+        labels = labels.long()
+        labels[:, : features.shape[1]] = -100
+        labels[generator_outputs.original_labels == 0] = -100
+
+        embeddings, attention_mask = self.prepare_inputs_discriminator(
+            discriminator_input_captions,
+            generator_outputs.text_attention_mask,
+            features,
+            vision_mask,
+        )
+
+        logits, loss = self(embeddings, attention_mask, labels)
+
+        predictions = logits > 0.5
+        predictions = predictions.long()
+        predictions = predictions[labels != -100]
+        targets = labels[labels != -100]
+
+        Output = namedtuple(
+            "Output",
+            ["loss", "logits", "predictions", "targets"],
+        )
+        return Output(
+            loss=loss,
+            logits=logits,
+            predictions=predictions,
+            targets=targets,
+        )
+
+    def training_step(self, batch, batch_idx):
+        output = self.run_train_batch(batch)
+
+        accuracy = metrics.accuracy(output.predictions, output.targets)
         # print(f"{predictions=}, {targets=}")
 
-        result = pl.TrainResult(minimize=loss)
+        loss = output.loss
 
-        result.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-        result.log("epoch_train_loss", loss, on_step=False, on_epoch=True)
-        result.log(
+        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log("epoch_train_loss", loss, on_step=False, on_epoch=True)
+        self.log(
             "train_accuracy", accuracy, on_step=True, on_epoch=True, prog_bar=True
         )
 
-        return result
+        return loss
 
     def validation_step(self, batch, batch_idx):
-        features, mask, caption_sets = batch
-        features, vision_mask, caption = self.split_captions(
-            features, mask, caption_sets
-        )
+        output = self.run_train_batch(batch)
 
-        if self.training_objective == TrainingObjective.MaskedLanguageModelling:
-            input_embeddings, attention_mask, labels = self.prepare_inputs_mlm(
-                caption, features, vision_mask
-            )
-            targets = labels[labels != -100]
-
-            logits, loss = self(input_embeddings, attention_mask, labels)
-
-            predictions = torch.argmax(logits[labels != -100, :], dim=1)
-
-        elif self.training_objective == TrainingObjective.Captioning:
-            input_embeddings, attention_mask, labels = self.prepare_inputs_clm(
-                caption, features, vision_mask
-            )
-            targets = self.shift_labels(labels).view(-1)
-
-            logits, loss = self(input_embeddings, attention_mask, labels)
-
-            skip = (labels[0, :] == -100).sum().item()
-            shifted_logits = logits[:, skip:-1, :].contiguous()
-
-            predictions = torch.argmax(shifted_logits, dim=2).view(-1)
-
-        accuracy = metrics.accuracy(predictions, targets)
+        accuracy = metrics.accuracy(output.predictions, output.targets)
         table_data = [
             [
                 self.tokenizer.decode(p.tolist()),
                 self.tokenizer.decode(t.tolist()),
             ]
             for p, t in zip(
-                predictions.split(1),
-                targets.split(1),
+                output.predictions.split(1),
+                output.targets.split(1),
             )
         ]
 
-        accuracy = metrics.accuracy(predictions, targets)
-
-        result = pl.EvalResult(checkpoint_on=loss)
-
-        result.log("val_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-        result.log("epoch_val_loss", loss, on_step=False, on_epoch=True)
-        result.log("val_accuracy", accuracy, on_step=True, on_epoch=True)
-        result.log(
+        loss = output.loss
+        self.log("val_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log("epoch_val_loss", loss, on_step=False, on_epoch=True)
+        self.log("val_accuracy", accuracy, on_step=True, on_epoch=True)
+        self.log(
             "examples",
             wandb.Table(columns=["Prediction", "Target"], data=table_data),
             on_step=True,
             on_epoch=False,
         )
 
-        return result
+        return loss
