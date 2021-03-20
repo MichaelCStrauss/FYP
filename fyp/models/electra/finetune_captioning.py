@@ -7,16 +7,19 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from transformers import (
     AutoTokenizer,
-    AutoModel,
     AutoModelForMaskedLM,
     AutoModelForCausalLM,
+    AutoModel,
     AutoConfig,
 )
 
+from fyp.models.visualbert.model import VisualBERT
 from fyp.models.electra.model import VisualElectra
-from fyp.data.coco_captions import CocoCaptions
 from fyp.models.electra.config import VisualElectraConfig
+from fyp.models.visualbert.config import VisualBERTConfig, TrainingObjective
+from fyp.data.coco_captions import CocoCaptions
 from fyp.models.utils.checkpoint_n_steps import CheckpointEveryNSteps
+from pytorch_lightning.utilities.cloud_io import load as pl_load
 
 work_dir = "models/electra"
 
@@ -24,31 +27,34 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 
 def main(
+    checkpoint: str,
     test: bool = False,
     overfit: float = 0,
     max_epochs: int = 1000,
-    checkpoint: str = None,
 ):
-
     config: VisualElectraConfig = VisualElectraConfig()
     # Base BERT model
     config.tokenizer = AutoTokenizer.from_pretrained(
         "google/bert_uncased_L-4_H-512_A-8"
         # "bert-base-uncased"
     )
-    gen_model_name = "google/bert_uncased_L-4_H-512_A-8"
-    disc_model_name = "google/bert_uncased_L-4_H-512_A-8"
+    gen_model_name = "google/bert_uncased_L-2_H-512_A-8"
+    disc_model_name = "google/bert_uncased_L-8_H-768_A-12"
     config.hidden_size = 512
 
     gen_conf = AutoConfig.from_pretrained(gen_model_name)
-    gen_conf.is_decoder = True
-    config.generator_model = AutoModelForCausalLM.from_config(gen_conf)
+    config.generator_model = AutoModelForMaskedLM.from_config(gen_conf)
+    config.generator_hidden_size = 512
 
     disc_conf = AutoConfig.from_pretrained(disc_model_name)
     disc_conf.is_decoder = True
     config.discriminator_model = AutoModel.from_config(disc_conf)
+    config.discriminator_hidden_size = 768
 
-    model = VisualElectra(config)
+    full_model = VisualElectra.load_from_checkpoint(checkpoint, config=config)
+    model = full_model.discriminator
+    model.training_objective = TrainingObjective.Captioning
+    model.add_lm_head()
 
     data = CocoCaptions()
     data.prepare_data()
@@ -72,7 +78,7 @@ def main(
         gpus=1,
         fast_dev_run=fast_dev_run,
         default_root_dir=work_dir,
-        row_log_interval=10,
+        log_every_n_steps=10,
         logger=logger,
         max_epochs=max_epochs,
         overfit_batches=overfit,

@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 import wandb
 import pytorch_lightning.metrics.functional as metrics
+from transformers.modeling_bert import BertLMPredictionHead
 from .config import VisualBERTConfig, TrainingObjective
 
 
@@ -14,7 +15,7 @@ class VisionLanguageEmbeddings(nn.Module):
         self.device = device
         self.word_embeddings = bert_embeddings
         self.feature_dimensions = 1024
-        self.hidden_dimensions = 512
+        self.hidden_dimensions = hidden_dimensions
         self.visual_projection = nn.Linear(
             self.feature_dimensions, self.hidden_dimensions
         )
@@ -98,7 +99,7 @@ class VisionLanguageEmbeddings(nn.Module):
 
 
 class VisualBERT(pl.LightningModule):
-    def __init__(self, config: VisualBERTConfig, learning_rate: float = None):
+    def __init__(self, config: VisualBERTConfig, learning_rate: float = None, manual_lm_head=False):
         super().__init__()
 
         # Utils
@@ -117,7 +118,17 @@ class VisualBERT(pl.LightningModule):
 
         self.discriminator = None
         if config.training_objective == TrainingObjective.Discriminator:
-            self.discriminator == nn.Linear(self.hidden_dimensions, 1)
+            self.discriminator = nn.Linear(self.hidden_dimensions, 1)
+
+        self.lm_head = None
+        if config.manual_lm_head or manual_lm_head:
+            self.add_lm_head()
+
+    def add_lm_head(self):
+        self.lm_head = BertLMPredictionHead(self.bert.config)
+        self.lm_head.decoder.weights = (
+            self.bert.get_input_embeddings().weight.transpose(0, 1)
+        )
 
     def setup(self, stage):
         pass
@@ -294,7 +305,11 @@ class VisualBERT(pl.LightningModule):
                 attention_mask=attention_mask,
             )
 
-            logits = output.logits
+            if self.lm_head is not None:
+                logits = self.lm_head(output.last_hidden_state)
+            else:
+                logits = output.logits
+
             loss = None
             if labels is not None:
                 # we are doing next-token prediction;
@@ -317,14 +332,15 @@ class VisualBERT(pl.LightningModule):
                 attention_mask=attention_mask,
             )
 
-            embedding_logits = output.logits
+            decoder_outputs = output.last_hidden_state
 
-            logits = self.discriminator(embedding_logits).squeeze()
-            logits = F.sigmoid(logits)
+            outputs = self.discriminator(decoder_outputs).squeeze()
+            logits = F.sigmoid(outputs)
+            flat_logits = logits[(attention_mask.bool()) & (labels != -100)]
+            labels = labels[(attention_mask.bool()) & (labels != -100)]
 
-            loss_fct = nn.CrossEntropyLoss()
-
-            loss = loss_fct(logits, labels)
+            loss_fct = nn.BCELoss()
+            loss = loss_fct(flat_logits, labels.float())
 
             return logits, loss
 
@@ -448,7 +464,54 @@ class VisualBERT(pl.LightningModule):
             targets=targets,
             labels=labels,
             text_attention_mask=text_attention_mask,
-            original_labels=original_labels
+            original_labels=original_labels,
+        )
+
+    def run_train_batch_discriminator(self, batch, generator_outputs):
+        features, mask, caption_sets = batch
+        features, vision_mask, _ = self.split_captions(features, mask, caption_sets)
+
+        generator_text_logits = generator_outputs.logits.clone()
+        generator_captions = torch.argmax(generator_text_logits, dim=2)
+        masked_captions = generator_outputs.labels != -100
+        discriminator_input_captions = generator_outputs.original_labels.clone()
+        discriminator_input_captions[masked_captions] = generator_captions[
+            masked_captions
+        ]
+        discriminator_input_captions = discriminator_input_captions[
+            :, features.shape[1] :
+        ]
+
+        labels = ~masked_captions
+        correct_guesses = generator_captions == generator_outputs.original_labels
+        labels[correct_guesses] = True
+        labels = labels.long()
+        labels[:, : features.shape[1]] = -100
+        labels[generator_outputs.original_labels == 0] = -100
+
+        embeddings, attention_mask = self.prepare_inputs_discriminator(
+            discriminator_input_captions,
+            generator_outputs.text_attention_mask,
+            features,
+            vision_mask,
+        )
+
+        logits, loss = self(embeddings, attention_mask, labels)
+
+        predictions = logits > 0.5
+        predictions = predictions.long()
+        predictions = predictions[labels != -100]
+        targets = labels[labels != -100]
+
+        Output = namedtuple(
+            "Output",
+            ["loss", "logits", "predictions", "targets"],
+        )
+        return Output(
+            loss=loss,
+            logits=logits,
+            predictions=predictions,
+            targets=targets,
         )
 
     def training_step(self, batch, batch_idx):
@@ -458,69 +521,39 @@ class VisualBERT(pl.LightningModule):
         # print(f"{predictions=}, {targets=}")
 
         loss = output.loss
-        result = pl.TrainResult(minimize=loss)
 
-        result.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-        result.log("epoch_train_loss", loss, on_step=False, on_epoch=True)
-        result.log(
+        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log("epoch_train_loss", loss, on_step=False, on_epoch=True)
+        self.log(
             "train_accuracy", accuracy, on_step=True, on_epoch=True, prog_bar=True
         )
 
-        return result
+        return loss
 
     def validation_step(self, batch, batch_idx):
-        features, mask, caption_sets = batch
-        features, vision_mask, caption = self.split_captions(
-            features, mask, caption_sets
-        )
+        output = self.run_train_batch(batch)
 
-        if self.training_objective == TrainingObjective.MaskedLanguageModelling:
-            input_embeddings, attention_mask, labels = self.prepare_inputs_mlm(
-                caption, features, vision_mask
-            )
-            targets = labels[labels != -100]
-
-            logits, loss = self(input_embeddings, attention_mask, labels)
-
-            predictions = torch.argmax(logits[labels != -100, :], dim=1)
-
-        elif self.training_objective == TrainingObjective.Captioning:
-            input_embeddings, attention_mask, labels = self.prepare_inputs_clm(
-                caption, features, vision_mask
-            )
-            targets = self.shift_labels(labels).view(-1)
-
-            logits, loss = self(input_embeddings, attention_mask, labels)
-
-            skip = (labels[0, :] == -100).sum().item()
-            shifted_logits = logits[:, skip:-1, :].contiguous()
-
-            predictions = torch.argmax(shifted_logits, dim=2).view(-1)
-
-        accuracy = metrics.accuracy(predictions, targets)
+        accuracy = metrics.accuracy(output.predictions, output.targets)
         table_data = [
             [
                 self.tokenizer.decode(p.tolist()),
                 self.tokenizer.decode(t.tolist()),
             ]
             for p, t in zip(
-                predictions.split(1),
-                targets.split(1),
+                output.predictions.split(1),
+                output.targets.split(1),
             )
         ]
 
-        accuracy = metrics.accuracy(predictions, targets)
-
-        result = pl.EvalResult(checkpoint_on=loss)
-
-        result.log("val_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-        result.log("epoch_val_loss", loss, on_step=False, on_epoch=True)
-        result.log("val_accuracy", accuracy, on_step=True, on_epoch=True)
-        result.log(
+        loss = output.loss
+        self.log("val_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
+        self.log("epoch_val_loss", loss, on_step=False, on_epoch=True)
+        self.log("val_accuracy", accuracy, on_step=True, on_epoch=True)
+        self.log(
             "examples",
             wandb.Table(columns=["Prediction", "Target"], data=table_data),
             on_step=True,
             on_epoch=False,
         )
 
-        return result
+        return loss

@@ -16,3 +16,5 @@ class VisualBERTConfig:
     hidden_size: int
 
     training_objective: TrainingObjective
+
+    manual_lm_head: bool = False
