@@ -76,3 +76,41 @@ class VisualElectra(pl.LightningModule):
         )
 
         return overall_loss
+
+    def validation_step(self, batch, batch_idx):
+        generator_output = self.generator.run_train_batch(batch)
+        generator_labels = generator_output.labels
+
+        original_captions = batch[2]
+        discriminator_output = self.discriminator.run_train_batch_discriminator(
+            batch, generator_output
+        )
+
+        overall_loss = 0.5 * generator_output.loss + discriminator_output.loss
+
+        accuracy = metrics.accuracy(
+            discriminator_output.predictions, discriminator_output.targets
+        )
+        self.log(
+            "generator_loss", overall_loss, on_step=True, on_epoch=False, prog_bar=True
+        )
+        self.log(
+            "discriminator_loss",
+            overall_loss,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+        )
+        self.log(
+            "val_loss", overall_loss, on_step=True, on_epoch=False, prog_bar=True
+        )
+        self.log("epoch_val_loss", overall_loss, on_step=False, on_epoch=True)
+        self.log(
+            "val_discriminator_accuracy",
+            accuracy,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+        )
+
+        return overall_loss

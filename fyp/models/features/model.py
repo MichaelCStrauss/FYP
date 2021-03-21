@@ -48,7 +48,7 @@ class FeatureExtractor(nn.Module):
 
             image = aug.get_transform(image_r).apply_image(image_r)
             image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1)).cuda()
-            height, width = image.shape[:2]
+            height, width = image.shape[1:]
             inputs = [{"image": image, "height": height, "width": width}]
 
             with torch.no_grad():
@@ -78,7 +78,17 @@ class FeatureExtractor(nn.Module):
                 # features of the proposed boxes
                 feats = box_features[pred_inds]
 
-                # self.print_label(pred_instances)
+                geometry = pred_instances[0]['instances'].pred_boxes.tensor
+                geometry[:, 0] /= width
+                geometry[:, 2] /= width
+                geometry[:, 1] /= height
+                geometry[:, 3] /= height
+
+                feature_wh = torch.zeros((feats.shape[0], 2), device='cuda')
+                feature_wh[:, 0] = geometry[:, 2] - geometry[:, 0]
+                feature_wh[:, 1] = geometry[:, 3] - geometry[:, 1]
+
+                feats = torch.cat((feats, geometry, feature_wh), dim=1)
 
                 outputs.append(feats)
 
@@ -94,3 +104,41 @@ class FeatureExtractor(nn.Module):
             instances = img["instances"]
             classes = [labels[i] for i in instances.pred_classes]
             print(f"image contains {', '.join(classes)}")
+
+if __name__ == "__main__":
+    from torchvision import transforms
+    from fyp.models.features.model import FeatureExtractor
+
+    def load_image(image):
+        preprocess = transforms.Compose(
+            [
+                transforms.Resize((512, 512)),
+                transforms.ToTensor(),
+            ]
+        )
+        image_tensor = preprocess(image)
+
+        image_tensor = image_tensor.permute((1, 2, 0)).flip(2) * 255
+
+        return image_tensor
+
+    model = FeatureExtractor()
+    model = model.cuda()
+    model.eval()
+
+    images="./data/raw/coco/train2017"
+    annotations="./data/raw/coco/annotations/captions_train2017.json"
+    import torch
+    import torchvision.datasets
+
+    dataset = torchvision.datasets.CocoCaptions(
+        root=images, annFile=annotations, transform=load_image
+    )
+
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=1)
+
+    i = iter(dataloader)
+    images, captions = next(i)
+    images, captions = next(i)
+
+    model(images.cuda())

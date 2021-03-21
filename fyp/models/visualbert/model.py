@@ -14,7 +14,7 @@ class VisionLanguageEmbeddings(nn.Module):
         super().__init__()
         self.device = device
         self.word_embeddings = bert_embeddings
-        self.feature_dimensions = 1024
+        self.feature_dimensions = 1030
         self.hidden_dimensions = hidden_dimensions
         self.visual_projection = nn.Linear(
             self.feature_dimensions, self.hidden_dimensions
@@ -27,7 +27,12 @@ class VisionLanguageEmbeddings(nn.Module):
         self.embedding_dropout = nn.Dropout(0.3)
 
     def forward(
-        self, input_ids, attention_mask, vision_features, vision_mask, mask_indices=None
+        self,
+        input_ids,
+        attention_mask,
+        vision_features,
+        vision_mask,
+        mask_indices=None,
     ):
         # Let N be the padded sequence length e.g. if the longest string pre-tokenizing
         # was 15 tokens long, N=17 (one start token, one end token)
@@ -99,7 +104,12 @@ class VisionLanguageEmbeddings(nn.Module):
 
 
 class VisualBERT(pl.LightningModule):
-    def __init__(self, config: VisualBERTConfig, learning_rate: float = None, manual_lm_head=False):
+    def __init__(
+        self,
+        config: VisualBERTConfig,
+        learning_rate: float = None,
+        manual_lm_head=False,
+    ):
         super().__init__()
 
         # Utils
@@ -524,9 +534,7 @@ class VisualBERT(pl.LightningModule):
 
         self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
         self.log("epoch_train_loss", loss, on_step=False, on_epoch=True)
-        self.log(
-            "train_accuracy", accuracy, on_step=True, on_epoch=True, prog_bar=True
-        )
+        self.log("train_accuracy", accuracy, on_step=True, on_epoch=True, prog_bar=True)
 
         return loss
 
