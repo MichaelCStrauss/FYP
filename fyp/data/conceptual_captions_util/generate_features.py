@@ -22,7 +22,10 @@ def generate_features(
     annotations: pd.DataFrame = pd.read_csv(annotations_file)
 
     for row in tqdm(annotations.loc[last_idx:].itertuples()):
-        image = transform(os.path.join(images, row.file))
+        try:
+            image = transform(os.path.join(images, row.file))
+        except:
+            continue
         idx = row.Index
         if os.path.exists(f"./data/processed/conceptual-captions/features/{idx}.pt"):
             continue
