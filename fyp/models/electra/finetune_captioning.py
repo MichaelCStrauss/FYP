@@ -70,6 +70,8 @@ def main(
             offline=False,
             log_model=True,
             save_dir=work_dir,
+            config={'checkpoint': checkpoint},
+            tags=['electra-finetune']
         )
 
     callbacks = [CheckpointEveryNSteps(3000)]

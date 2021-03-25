@@ -66,7 +66,7 @@ def main(
             save_dir=work_dir,
         )
 
-    callbacks = [CheckpointEveryNSteps(3000)]
+    callbacks = [CheckpointEveryNSteps(6000)]
 
     trainer = pl.Trainer(
         gpus=1,
