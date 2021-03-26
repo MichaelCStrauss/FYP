@@ -14,7 +14,7 @@ from transformers import (
 )
 
 from fyp.models.electra.model import VisualElectra
-from fyp.data.coco_captions import CocoCaptions
+from fyp.data.conceptual_captions import ConceptualCaptions
 from fyp.models.electra.config import VisualElectraConfig
 from fyp.models.utils.checkpoint_n_steps import CheckpointEveryNSteps
 
@@ -50,7 +50,7 @@ def main(
 
     model = VisualElectra(config)
 
-    data = CocoCaptions()
+    data = ConceptualCaptions()
     data.prepare_data()
     data.setup()
 

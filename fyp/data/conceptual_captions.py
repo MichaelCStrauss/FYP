@@ -40,7 +40,7 @@ class ConceptualCaptionsDataset(Dataset):
         )
         while len(captions) < self.captions_length:
             captions.append(None)
-        captions = captions[:5]
+        captions = captions[:self.captions_length]
 
         features, mask = self.postprocess_features(features, self.feature_length)
 
