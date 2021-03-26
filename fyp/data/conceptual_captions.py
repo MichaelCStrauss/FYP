@@ -16,8 +16,8 @@ class ConceptualCaptionsDataset(Dataset):
 
         self.file_list = os.listdir(features_directory)
 
-        self.spec = pd.read_csv(spec_file, sep='\t')
-    
+        self.spec = pd.read_csv(spec_file, sep="\t")
+
     @staticmethod
     def postprocess_features(features, feature_length):
         num_features = features.shape[0]
@@ -40,7 +40,7 @@ class ConceptualCaptionsDataset(Dataset):
         )
         while len(captions) < self.captions_length:
             captions.append(None)
-        captions = captions[:self.captions_length]
+        captions = captions[: self.captions_length]
 
         features, mask = self.postprocess_features(features, self.feature_length)
 
@@ -50,6 +50,7 @@ class ConceptualCaptionsDataset(Dataset):
 class ConceptualCaptions(pl.LightningDataModule):
     def __init__(self):
         super().__init__()
+        self.spec_file = "data/raw/conceptual-captions/results.csv"
         self.external_dir = "data/external/coco"
         self.interim_dir = "data/interim/coco"
         self.processed_dir = "data/processed/conceptual-captions"
@@ -74,7 +75,7 @@ class ConceptualCaptions(pl.LightningDataModule):
     def setup(self, stage=None):
         self.dataset = ConceptualCaptionsDataset(
             features_directory=self.processed_dir + "/features",
-            captions_directory=self.processed_dir + "/captions",
+            spec_file=self.spec_file,
         )
 
         train_length = int(len(self.dataset) * 0.92)
