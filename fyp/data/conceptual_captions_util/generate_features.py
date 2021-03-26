@@ -22,19 +22,20 @@ def generate_features(
     annotations: pd.DataFrame = pd.read_csv(annotations_file)
 
     for row in tqdm(annotations.loc[last_idx:].itertuples()):
+        idx = row.Index
         try:
             image = transform(os.path.join(images, row.file))
-        except:
-            continue
-        idx = row.Index
-        if os.path.exists(f"./data/processed/conceptual-captions/features/{idx}.pt"):
-            continue
-        features_set = model(image.cuda())
-        for i, features in enumerate(features_set):
-            features = features.cpu()
-            torch.save(features, f"./data/processed/conceptual-captions/features/{idx}.pt")
-            image_caps = [row.caption]
-            torch.save(image_caps, f"./data/processed/conceptual-captions/captions/{idx}.pt")
+            if os.path.exists(f"./data/processed/conceptual-captions/features/{idx}.pt"):
+                continue
+            features_set = model(image.cuda())
+            for i, features in enumerate(features_set):
+                features = features.cpu()
+                torch.save(features, f"./data/processed/conceptual-captions/features/{idx}.pt")
+                image_caps = [row.caption]
+                torch.save(image_caps, f"./data/processed/conceptual-captions/captions/{idx}.pt")
+        except Exception as e:
+            print(f"Error with {idx}")
+            print(e)
 
 
 if __name__ == "__main__":
