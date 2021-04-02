@@ -75,7 +75,7 @@ def main(
         gpus=1,
         fast_dev_run=fast_dev_run,
         default_root_dir=work_dir,
-        row_log_interval=10,
+        log_every_n_steps=10,
         logger=logger,
         max_epochs=max_epochs,
         overfit_batches=overfit,
