@@ -38,8 +38,8 @@ def main(
         # "bert-base-uncased"
     )
     config.training_objective = training_objective
-    bert_model_name = "google/bert_uncased_L-4_H-512_A-8"
-    config.hidden_size = 512
+    bert_model_name = "google/bert_uncased_L-8_H-768_A-12"
+    config.hidden_size = 768
 
     if training_objective == TrainingObjective.MaskedLanguageModelling:
         config.bert_model = AutoModelForMaskedLM.from_pretrained(bert_model_name)
