@@ -74,7 +74,7 @@ def main(
             tags=['electra-finetune']
         )
 
-    callbacks = [CheckpointEveryNSteps(3000)]
+    callbacks = [CheckpointEveryNSteps(50000)]
 
     trainer = pl.Trainer(
         gpus=1,

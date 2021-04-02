@@ -54,11 +54,11 @@ class VisualElectra(pl.LightningModule):
             discriminator_output.predictions, discriminator_output.targets
         )
         self.log(
-            "generator_loss", overall_loss, on_step=True, on_epoch=False, prog_bar=True
+            "generator_loss", generator_output.loss, on_step=True, on_epoch=False, prog_bar=True
         )
         self.log(
             "discriminator_loss",
-            overall_loss,
+            discriminator_output.loss,
             on_step=True,
             on_epoch=False,
             prog_bar=False,

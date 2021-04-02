@@ -424,7 +424,11 @@ class VisualBERT(pl.LightningModule):
                 inputs.embeddings, inputs.attention_mask, inputs.masked_labels
             )
 
-            predictions = torch.argmax(logits[inputs.masked_labels != -100, :], dim=1)
+            predictions = None
+            try:
+                predictions = torch.argmax(logits[inputs.masked_labels != -100, :], dim=1)
+            except:
+                pass
 
             text_attention_mask = inputs.text_attention_mask
             labels = inputs.masked_labels
