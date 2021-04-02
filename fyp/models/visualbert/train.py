@@ -14,6 +14,7 @@ from transformers import (
 
 from fyp.models.visualbert.model import VisualBERT
 from fyp.data.coco_captions import CocoCaptions
+from fyp.data.conceptual_captions import ConceptualCaptions
 from fyp.models.visualbert.config import VisualBERTConfig, TrainingObjective
 from fyp.models.utils.checkpoint_n_steps import CheckpointEveryNSteps
 
@@ -52,7 +53,7 @@ def main(
     else:
         model = VisualBERT.load_from_checkpoint(checkpoint, config=config)
 
-    data = CocoCaptions()
+    data = ConceptualCaptions()
     data.prepare_data()
     data.setup()
 
@@ -68,7 +69,7 @@ def main(
             save_dir=work_dir,
         )
 
-    callbacks = [CheckpointEveryNSteps(3000)]
+    callbacks = [CheckpointEveryNSteps(50000)]
 
     trainer = pl.Trainer(
         gpus=1,
