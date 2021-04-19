@@ -1,19 +1,5 @@
-from fyp.models.oscar.other import CaptionTensorizer
-from fyp.models.oscar.pytorch_transformers.tokenization_bert import BertTokenizer
-from fyp.models.oscar.pytorch_transformers.modeling_bert import BertConfig
-from fyp.models.oscar.modeling_bert import BertForImageCaptioning
-import torch
-import logging
-import numpy as np
-import os
-import os.path as op
 import argparse
-import json
-import base64
-import pandas as pd
-
-logger = logging.getLogger()
-
+import torch
 
 def restore_training_settings(args):
     if args.do_train:
@@ -49,7 +35,7 @@ def restore_training_settings(args):
             train_v = getattr(train_args, param)
             test_v = getattr(args, param)
             if train_v != test_v:
-                logger.warning(
+                print(
                     "Override {} with train args: {} -> {}".format(
                         param, test_v, train_v
                     )
@@ -88,7 +74,14 @@ parser.add_argument(
     help="yaml file used for validation during training.",
 )
 parser.add_argument(
-    "--model_name_or_path",
+    "--teacher_model_name_or_path",
+    default=None,
+    type=str,
+    required=False,
+    help="Path to pre-trained model or model type.",
+)
+parser.add_argument(
+    "--student_model_name_or_path",
     default=None,
     type=str,
     required=False,
@@ -341,130 +334,3 @@ args.distributed = False
 args.device = torch.device("cuda")
 
 args = restore_training_settings(args)
-
-config_class, model_class, tokenizer_class = (
-    BertConfig,
-    BertForImageCaptioning,
-    BertTokenizer,
-)
-
-checkpoint = args.eval_model_dir
-assert op.isdir(checkpoint)
-config = config_class.from_pretrained(checkpoint)
-config.output_hidden_states = args.output_hidden_states
-tokenizer = tokenizer_class.from_pretrained(checkpoint, do_lower_case=True)
-logger.info("Evaluate the following checkpoint: %s", checkpoint)
-model = model_class.from_pretrained(checkpoint, config=config)
-
-model.to(args.device)
-
-
-(
-    cls_token_id,
-    sep_token_id,
-    pad_token_id,
-    mask_token_id,
-    period_token_id,
-) = tokenizer.convert_tokens_to_ids(
-    [
-        tokenizer.cls_token,
-        tokenizer.sep_token,
-        tokenizer.pad_token,
-        tokenizer.mask_token,
-        ".",
-    ]
-)
-world_size = 1
-
-model.eval()
-inputs_param = {
-    "is_decode": True,
-    "do_sample": False,
-    "bos_token_id": cls_token_id,
-    "pad_token_id": pad_token_id,
-    "eos_token_ids": [sep_token_id],
-    "mask_token_id": mask_token_id,
-    # for adding od labels
-    "add_od_labels": args.add_od_labels,
-    "od_labels_start_posid": args.max_seq_a_length,
-    # hyperparameters of beam search
-    "max_length": args.max_gen_length,
-    "num_beams": args.num_beams,
-    "temperature": args.temperature,
-    "top_k": args.top_k,
-    "top_p": args.top_p,
-    "repetition_penalty": args.repetition_penalty,
-    "length_penalty": args.length_penalty,
-    "num_return_sequences": args.num_return_sequences,
-    "num_keep_best": args.num_keep_best,
-}
-
-if args.use_cbs:
-    inputs_param.update(
-        {
-            "use_cbs": True,
-            "min_constraints_to_satisfy": args.min_constraints_to_satisfy,
-        }
-    )
-
-tensorizer = CaptionTensorizer(
-    tokenizer,
-    max_img_seq_length=args.max_img_seq_length,
-    max_seq_length=args.max_seq_length,
-    max_seq_a_length=args.max_seq_a_length,
-    is_train=False,
-    mask_prob=args.mask_prob,
-    max_masked_tokens=args.max_masked_tokens,
-)
-
-# data = pd.read_csv('data/processed/coco-oscar/test.feature.tsv', sep='\t', header=None).rename(columns={0: "index", 1: "data"})
-# print(data)
-
-data = ""
-with open('data/processed/coco2014test/features.tsv') as f:
-    line = f.readline()
-    data = line.split('\t')[2]
-
-with torch.no_grad():
-    img_keys = [0]
-    num_boxes = 38
-    features = np.frombuffer(base64.b64decode(data), np.float32
-            ).reshape((num_boxes, -1))
-    features =  torch.Tensor(features)
-    print(features.shape)
-
-    caption = ""
-    example = tensorizer.tensorize_example(
-        caption, features, text_b=""
-    )
-    batch = tuple(t.unsqueeze(0).to(args.device) for t in example)
-    inputs = {
-        "input_ids": batch[0],
-        "attention_mask": batch[1],
-        "token_type_ids": batch[2],
-        "img_feats": batch[3],
-        "masked_pos": batch[4],
-    }
-    print(inputs['img_feats'].shape)
-    if args.use_cbs:
-        inputs.update(
-            {
-                "fsm": batch[5],
-                "num_constraints": batch[6],
-            }
-        )
-    inputs.update(inputs_param)
-    # captions, logprobs
-    outputs = model(**inputs)
-    all_caps = outputs[0]  # batch_size * num_keep_best * max_len
-    all_confs = torch.exp(outputs[1])
-
-    for img_key, caps, confs in zip(img_keys, all_caps, all_confs):
-        res = []
-        for cap, conf in zip(caps, confs):
-            print(cap.tolist())
-            cap = tokenizer.decode(cap.tolist(), skip_special_tokens=True)
-            res.append({"caption": cap, "conf": conf.item()})
-        if isinstance(img_key, torch.Tensor):
-            img_key = img_key.item()
-        print(json.dumps(res))
