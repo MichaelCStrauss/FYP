@@ -278,7 +278,6 @@ def main():
                     "student_accuracy": batch_acc,
                 }
             )
-            break
 
         wandb.log(
             {
