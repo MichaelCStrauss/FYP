@@ -47,11 +47,12 @@ class HiddenLayerMSELoss(nn.Module):
         self.mse_loss = nn.MSELoss()
         self.transform = nn.Linear(student_hidden_dim, teacher_hidden_dim, bias=False)
 
-    def forward(self, teacher_hiddens, student_hiddens, inputs):
+    def forward(self, teacher_hiddens, student_hiddens, teacher_inputs, student_inputs):
         total_loss = torch.tensor(0, dtype=torch.float32).cuda()
         for i in range(1, len(student_hiddens)):
-            masked_pos = inputs["masked_pos"]
-            num_features = inputs["img_feats"].shape[1]
+            num_features = teacher_inputs["img_feats"].shape[1]
+            teacher_masked_pos = teacher_inputs["masked_pos"]
+            student_masked_pos = student_inputs["masked_pos"]
 
             teacher_hidden = teacher_hiddens[i * 3 - 1]
             student_hidden = student_hiddens[i]
@@ -59,13 +60,17 @@ class HiddenLayerMSELoss(nn.Module):
             teacher_hidden = teacher_hidden[:, num_features:, :]
             student_hidden = student_hidden[:, num_features:, :]
 
-            teacher_hidden = teacher_hidden[masked_pos == 1, :]
-            student_hidden = student_hidden[masked_pos == 1, :]
+            teacher_hidden = teacher_hidden[teacher_masked_pos == 1, :]
+            student_hidden = student_hidden[student_masked_pos == 1, :]
 
             transformed_student = self.transform(student_hidden)
 
-            total_loss += self.mse_loss(transformed_student, teacher_hidden)
+            teacher_mean = torch.mean(teacher_hidden, 0)
+            student_mean = torch.mean(transformed_student, 0)
+
+            total_loss += self.mse_loss(student_mean, teacher_mean)
         return total_loss
+
 
 # class AttentionLayerMSELoss(nn.Module):
 #     def __init__(self):
@@ -88,8 +93,6 @@ class HiddenLayerMSELoss(nn.Module):
 
 #             total_loss += self.mse_loss(transformed_student, teacher_hidden)
 #         return total_loss
-
-
 
 
 def compute_score_with_logits(logits, labels):
@@ -189,8 +192,12 @@ def main():
     if args.wandb:
         wandb.init(config=args)
 
-    tokenizer = BertTokenizer.from_pretrained(
+    teacher_tokenizer = BertTokenizer.from_pretrained(
         args.teacher_model_name_or_path,
+        do_lower_case=args.do_lower_case,
+    )
+    student_tokenizer = BertTokenizer.from_pretrained(
+        args.student_model_name_or_path,
         do_lower_case=args.do_lower_case,
     )
 
@@ -210,7 +217,8 @@ def main():
 
     dataset = CaptionTSVDataset(
         yaml_file,
-        tokenizer=tokenizer,
+        teacher_tokenizer=teacher_tokenizer,
+        student_tokenizer=student_tokenizer,
         add_od_labels=args.add_od_labels,
         max_img_seq_length=args.max_img_seq_length,
         max_seq_length=args.max_seq_length,
@@ -224,7 +232,7 @@ def main():
         dataset,
         num_workers=args.num_workers,
         sampler=torch.utils.data.sampler.RandomSampler(dataset),
-        batch_size=8,
+        batch_size=1,
         pin_memory=True,
     )
 
@@ -279,29 +287,50 @@ def main():
         epoch_loss, epoch_acc = 0.0, 0.0
         num_steps = len(data_loader)
         print(num_steps)
-        for step, (img_keys, batch) in tqdm(enumerate(data_loader)):
+        for step, (img_keys, teacher_batch, student_batch) in tqdm(
+            enumerate(data_loader)
+        ):
             global_step += 1
-            batch = tuple(t.to(args.device) for t in batch)
+            teacher_batch = tuple(t.to(args.device) for t in teacher_batch)
+            student_batch = tuple(t.to(args.device) for t in student_batch)
 
             teacher_model.eval()
             student_model.train()
-            inputs = {
-                "input_ids": batch[0],
-                "attention_mask": batch[1],
-                "token_type_ids": batch[2],
-                "img_feats": batch[3],
-                "masked_pos": batch[4],
-                "masked_ids": batch[5],
+
+            teacher_inputs = {
+                "input_ids": teacher_batch[0],
+                "attention_mask": teacher_batch[1],
+                "token_type_ids": teacher_batch[2],
+                "img_feats": teacher_batch[3],
+                "masked_pos": teacher_batch[4],
+                "masked_ids": teacher_batch[5],
             }
-            masked_ids = inputs["masked_ids"]
-            masked_ids = masked_ids[masked_ids != 0]
-            teacher_outputs = teacher_model(**inputs)
-            student_outputs = student_model(**inputs)
+            teacher_masked_ids = teacher_inputs["masked_ids"]
+            teacher_masked_ids = teacher_masked_ids[teacher_masked_ids != 0]
+
+            student_inputs = {
+                "input_ids": student_batch[0],
+                "attention_mask": student_batch[1],
+                "token_type_ids": student_batch[2],
+                "img_feats": student_batch[3],
+                "masked_pos": student_batch[4],
+                "masked_ids": student_batch[5],
+            }
+            student_masked_ids = student_inputs["masked_ids"]
+            student_masked_ids = student_masked_ids[student_masked_ids != 0]
+
+            print(teacher_inputs["input_ids"])
+            print(student_inputs["input_ids"])
+            print(student_inputs["masked_pos"])
+
+            teacher_outputs = teacher_model(**teacher_inputs)
+            student_outputs = student_model(**student_inputs)
 
             loss = hidden_loss(
                 teacher_outputs[2],
                 student_outputs[2],
-                inputs,
+                teacher_inputs,
+                student_inputs,
             )
             epoch_loss += loss.item() / num_steps
 
@@ -320,17 +349,12 @@ def main():
                 print(f"Student loss: {student_outputs[0]}")
                 print(f"KD Loss: {loss}")
 
-            batch_score = compute_score_with_logits(student_outputs[0], masked_ids)
-            batch_acc = torch.sum(batch_score.float()) / torch.sum(inputs["masked_pos"])
-            epoch_acc += batch_acc / num_steps
-
             if args.wandb:
                 wandb.log(
                     {
                         "student_loss": student_outputs[0],
                         "teacher_loss": teacher_outputs[0],
                         "loss": loss,
-                        "student_accuracy": batch_acc,
                     }
                 )
 
@@ -338,12 +362,11 @@ def main():
             wandb.log(
                 {
                     "epoch_loss": epoch_loss,
-                    "epoch_acc": epoch_acc,
                 },
                 step=global_step,
             )
 
-        save_checkpoint(student_model, tokenizer, args, epoch, num_steps)
+        save_checkpoint(student_model, student_tokenizer, args, epoch, num_steps)
 
 
 if __name__ == "__main__":
