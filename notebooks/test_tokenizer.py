@@ -52,9 +52,7 @@ s_input_ids = first_small[0]
 masked_pos = first_original[4]
 masked_ids = first_original[5]
 
-expanded = torch.tensor(small_tokenizer.encode(original_tokenizer.decode(masked_ids.tolist())))
-print(o_input_ids)
-print(masked_ids)
+expanded = torch.tensor(small_tokenizer.encode(original_tokenizer.decode(masked_ids.unsqueeze(0))))
 print(expanded)
 no_pad_ex = expanded[expanded != 0]
 idx = (s_input_ids[..., None] == no_pad_ex).any(-1).nonzero()

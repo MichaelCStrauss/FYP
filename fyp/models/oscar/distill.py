@@ -309,20 +309,16 @@ def main():
                 student_model.parameters(), args.max_grad_norm
             )
 
-            loss.backward()
-
-            scheduler.step()
-            optimizer.step()
-            student_model.zero_grad()
-
             if step % 1000 == 0:
                 print(f"Teacher loss: {teacher_outputs[0]}")
                 print(f"Student loss: {student_outputs[0]}")
                 print(f"KD Loss: {loss}")
 
-            batch_score = compute_score_with_logits(student_outputs[0], masked_ids)
-            batch_acc = torch.sum(batch_score.float()) / torch.sum(inputs["masked_pos"])
-            epoch_acc += batch_acc / num_steps
+            loss.backward()
+
+            scheduler.step()
+            optimizer.step()
+            student_model.zero_grad()
 
             if args.wandb:
                 wandb.log(
@@ -330,7 +326,6 @@ def main():
                         "student_loss": student_outputs[0],
                         "teacher_loss": teacher_outputs[0],
                         "loss": loss,
-                        "student_accuracy": batch_acc,
                     }
                 )
 
@@ -338,7 +333,6 @@ def main():
             wandb.log(
                 {
                     "epoch_loss": epoch_loss,
-                    "epoch_acc": epoch_acc,
                 },
                 step=global_step,
             )
