@@ -319,10 +319,6 @@ def main():
             student_masked_ids = student_inputs["masked_ids"]
             student_masked_ids = student_masked_ids[student_masked_ids != 0]
 
-            print(teacher_inputs["input_ids"])
-            print(student_inputs["input_ids"])
-            print(student_inputs["masked_pos"])
-
             teacher_outputs = teacher_model(**teacher_inputs)
             student_outputs = student_model(**student_inputs)
 
