@@ -321,6 +321,10 @@ parser.add_argument(
 parser.add_argument(
     "--use_cbs", action="store_true", help="Use constrained beam search for decoding"
 )
+# for Constrained Beam Search
+parser.add_argument(
+    "--wandb", action="store_true", help="Use constrained beam search for decoding"
+)
 parser.add_argument(
     "--min_constraints_to_satisfy",
     type=int,

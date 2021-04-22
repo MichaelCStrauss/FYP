@@ -37,9 +37,59 @@ class KDLoss(nn.Module):
             )
             * alpha
             * temperature ** 2
-            + self.ce_loss(student_logits, labels) * 1
-            - alpha
+            + self.ce_loss(student_logits, labels) * (1 - alpha)
         )
+
+
+class HiddenLayerMSELoss(nn.Module):
+    def __init__(self, teacher_hidden_dim, student_hidden_dim):
+        super().__init__()
+        self.mse_loss = nn.MSELoss()
+        self.transform = nn.Linear(student_hidden_dim, teacher_hidden_dim, bias=False)
+
+    def forward(self, teacher_hiddens, student_hiddens, inputs):
+        total_loss = torch.tensor(0, dtype=torch.float32).cuda()
+        for i in range(1, len(student_hiddens)):
+            masked_pos = inputs["masked_pos"]
+            num_features = inputs["img_feats"].shape[1]
+
+            teacher_hidden = teacher_hiddens[i * 3 - 1]
+            student_hidden = student_hiddens[i]
+
+            teacher_hidden = teacher_hidden[:, num_features:, :]
+            student_hidden = student_hidden[:, num_features:, :]
+
+            teacher_hidden = teacher_hidden[masked_pos == 1, :]
+            student_hidden = student_hidden[masked_pos == 1, :]
+
+            transformed_student = self.transform(student_hidden)
+
+            total_loss += self.mse_loss(transformed_student, teacher_hidden)
+        return total_loss
+
+# class AttentionLayerMSELoss(nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         self.mse_loss = nn.MSELoss()
+
+#     def forward(self, teacher_attns, student_attns):
+#         total_loss = torch.tensor(0, dtype=torch.float32).cuda()
+#         for i in range(len(student_attns)):
+#             teacher_attn = teacher_hiddens[(i+1) * 3 - 1]
+#             student_attn = student_hiddens[i]
+
+#             teacher_hidden = teacher_hidden[:, num_features:, :]
+#             student_hidden = student_hidden[:, num_features:, :]
+
+#             teacher_hidden = teacher_hidden[masked_pos == 1, :]
+#             student_hidden = student_hidden[masked_pos == 1, :]
+
+#             transformed_student = self.transform(student_hidden)
+
+#             total_loss += self.mse_loss(transformed_student, teacher_hidden)
+#         return total_loss
+
+
 
 
 def compute_score_with_logits(logits, labels):
@@ -61,9 +111,7 @@ def load_student_model(args):
         num_labels=args.num_labels,
         finetuning_task="image_captioning",
     )
-    if args.scst:
-        # avoid using too much memory
-        config.output_hidden_states = True
+    config.output_hidden_states = True
     config.img_feature_dim = args.img_feature_dim
     config.img_feature_type = args.img_feature_type
     config.hidden_dropout_prob = args.drop_out
@@ -73,6 +121,7 @@ def load_student_model(args):
     config.label_smoothing = args.label_smoothing
     config.drop_worst_ratio = args.drop_worst_ratio
     config.drop_worst_after = args.drop_worst_after
+    config.output_attentions = False
     model = model_class.from_pretrained(
         args.student_model_name_or_path,
         from_tf=False,
@@ -95,9 +144,7 @@ def load_teacher_model(args):
         num_labels=args.num_labels,
         finetuning_task="image_captioning",
     )
-    if args.scst:
-        # avoid using too much memory
-        config.output_hidden_states = True
+    config.output_hidden_states = True
     config.img_feature_dim = args.img_feature_dim
     config.img_feature_type = args.img_feature_type
     config.hidden_dropout_prob = args.drop_out
@@ -107,6 +154,7 @@ def load_teacher_model(args):
     config.label_smoothing = args.label_smoothing
     config.drop_worst_ratio = args.drop_worst_ratio
     config.drop_worst_after = args.drop_worst_after
+    config.output_attentions = False
     model = model_class.from_pretrained(
         args.teacher_model_name_or_path,
         from_tf=False,
@@ -138,7 +186,8 @@ def save_checkpoint(model, tokenizer, args, epoch, iteration, num_trial=10):
 
 
 def main():
-    wandb.init(config=args)
+    if args.wandb:
+        wandb.init(config=args)
 
     tokenizer = BertTokenizer.from_pretrained(
         args.teacher_model_name_or_path,
@@ -148,7 +197,8 @@ def main():
     teacher_model, teacher_config = load_teacher_model(args)
     student_model, student_config = load_student_model(args)
     summary(student_model)
-    wandb.watch(student_model)
+    if args.wandb:
+        wandb.watch(student_model)
 
     teacher_model.to(args.device)
     student_model.to(args.device)
@@ -217,13 +267,18 @@ def main():
     else:
         raise ValueError("Unknown scheduler type: {}".format(args.scheduler))
 
-    kd_loss = KDLoss()
+    hidden_loss = HiddenLayerMSELoss(
+        teacher_config.hidden_size, student_config.hidden_size
+    )
+    hidden_loss.to(args.device)
+    hidden_loss.train()
 
     global_step = 0
 
     for epoch in range(int(args.num_train_epochs)):
         epoch_loss, epoch_acc = 0.0, 0.0
         num_steps = len(data_loader)
+        print(num_steps)
         for step, (img_keys, batch) in tqdm(enumerate(data_loader)):
             global_step += 1
             batch = tuple(t.to(args.device) for t in batch)
@@ -243,11 +298,10 @@ def main():
             teacher_outputs = teacher_model(**inputs)
             student_outputs = student_model(**inputs)
 
-            loss = kd_loss(
-                student_outputs[1],
-                teacher_outputs[1],
-                masked_ids,
-                1,
+            loss = hidden_loss(
+                teacher_outputs[2],
+                student_outputs[2],
+                inputs,
             )
             epoch_loss += loss.item() / num_steps
 
@@ -270,22 +324,24 @@ def main():
             batch_acc = torch.sum(batch_score.float()) / torch.sum(inputs["masked_pos"])
             epoch_acc += batch_acc / num_steps
 
+            if args.wandb:
+                wandb.log(
+                    {
+                        "student_loss": student_outputs[0],
+                        "teacher_loss": teacher_outputs[0],
+                        "loss": loss,
+                        "student_accuracy": batch_acc,
+                    }
+                )
+
+        if args.wandb:
             wandb.log(
                 {
-                    "student_loss": student_outputs[0],
-                    "teacher_loss": teacher_outputs[0],
-                    "loss": loss,
-                    "student_accuracy": batch_acc,
-                }
+                    "epoch_loss": epoch_loss,
+                    "epoch_acc": epoch_acc,
+                },
+                step=global_step,
             )
-
-        wandb.log(
-            {
-                "epoch_loss": epoch_loss,
-                "epoch_acc": epoch_acc,
-            },
-            step=global_step,
-        )
 
         save_checkpoint(student_model, tokenizer, args, epoch, num_steps)
 

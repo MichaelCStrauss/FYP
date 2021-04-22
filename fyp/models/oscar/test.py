@@ -422,6 +422,7 @@ tensorizer = CaptionTensorizer(
 
 data = ""
 with open('data/processed/coco2014test/features.tsv') as f:
+    f.readline()
     line = f.readline()
     data = line.split('\t')[2]
 
