@@ -277,6 +277,8 @@ def main():
 
     hidden_loss.train()
 
+    output_loss = KDLoss()
+
     global_step = 0
 
     for epoch in range(int(args.num_train_epochs)):
@@ -304,21 +306,25 @@ def main():
                 teacher_outputs = teacher_model(**inputs)
             student_outputs = student_model(**inputs)
 
-            loss = hidden_loss(
+            h_loss = hidden_loss(
                 teacher_outputs[2],
                 student_outputs[2],
                 inputs,
             )
+            o_loss = output_loss(
+                student_outputs[1],
+                teacher_outputs[1],
+                masked_ids,
+                1,
+            )
+
+            loss = h_loss + o_loss
+
             epoch_loss += loss.item() / num_steps
 
             torch.nn.utils.clip_grad_norm_(
                 student_model.parameters(), args.max_grad_norm
             )
-
-            if step % 1000 == 0:
-                print(f"Teacher loss: {teacher_outputs[0]}")
-                print(f"Student loss: {student_outputs[0]}")
-                print(f"KD Loss: {loss}")
 
             loss.backward()
 
@@ -339,6 +345,8 @@ def main():
                     {
                         "student_loss": student_outputs[0],
                         "teacher_loss": teacher_outputs[0],
+                        "hidden_loss": h_loss,
+                        "output_loss": o_loss,
                         "loss": loss,
                     }
                 )
