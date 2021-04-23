@@ -56,16 +56,17 @@ class HiddenLayerMSELoss(nn.Module):
             teacher_hidden = teacher_hiddens[i * 3 - 1]
             student_hidden = student_hiddens[i]
 
-            teacher_hidden = teacher_hidden[:, num_features:, :]
-            student_hidden = student_hidden[:, num_features:, :]
+            # teacher_hidden = teacher_hidden[:, num_features:, :]
+            # student_hidden = student_hidden[:, num_features:, :]
 
-            teacher_hidden = teacher_hidden[masked_pos == 1, :]
-            student_hidden = student_hidden[masked_pos == 1, :]
+            # teacher_hidden = teacher_hidden[masked_pos == 1, :]
+            # student_hidden = student_hidden[masked_pos == 1, :]
 
             transformed_student = self.transform(student_hidden)
 
             total_loss += self.mse_loss(transformed_student, teacher_hidden)
         return total_loss
+
 
 # class AttentionLayerMSELoss(nn.Module):
 #     def __init__(self):
@@ -88,8 +89,6 @@ class HiddenLayerMSELoss(nn.Module):
 
 #             total_loss += self.mse_loss(transformed_student, teacher_hidden)
 #         return total_loss
-
-
 
 
 def compute_score_with_logits(logits, labels):
@@ -237,6 +236,11 @@ def main():
         t_total = (
             len(data_loader) // args.gradient_accumulation_steps * args.num_train_epochs
         )
+
+    hidden_loss = HiddenLayerMSELoss(
+        teacher_config.hidden_size, student_config.hidden_size
+    )
+    hidden_loss.to(args.device)
     # Prepare optimizer and scheduler
     no_decay = ["bias", "LayerNorm.weight"]
     grouped_parameters = [
@@ -256,6 +260,10 @@ def main():
             ],
             "weight_decay": 0.0,
         },
+        {
+            "params": hidden_loss.parameters(),
+            "weight_decay": 0.0,
+        },
     ]
     optimizer = AdamW(grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     if args.scheduler == "constant":
@@ -267,10 +275,6 @@ def main():
     else:
         raise ValueError("Unknown scheduler type: {}".format(args.scheduler))
 
-    hidden_loss = HiddenLayerMSELoss(
-        teacher_config.hidden_size, student_config.hidden_size
-    )
-    hidden_loss.to(args.device)
     hidden_loss.train()
 
     global_step = 0
@@ -279,7 +283,8 @@ def main():
         epoch_loss, epoch_acc = 0.0, 0.0
         num_steps = len(data_loader)
         print(num_steps)
-        for step, (img_keys, batch) in tqdm(enumerate(data_loader)):
+        pbar = tqdm(data_loader)
+        for step, (img_keys, batch) in enumerate(pbar):
             global_step += 1
             batch = tuple(t.to(args.device) for t in batch)
 
@@ -295,7 +300,8 @@ def main():
             }
             masked_ids = inputs["masked_ids"]
             masked_ids = masked_ids[masked_ids != 0]
-            teacher_outputs = teacher_model(**inputs)
+            with torch.no_grad():
+                teacher_outputs = teacher_model(**inputs)
             student_outputs = student_model(**inputs)
 
             loss = hidden_loss(
@@ -316,9 +322,17 @@ def main():
 
             loss.backward()
 
-            scheduler.step()
             optimizer.step()
+            scheduler.step()
             student_model.zero_grad()
+
+            pbar.set_postfix(
+                {
+                    "student_loss": round(student_outputs[0].item(), 2),
+                    "teacher_loss": round(teacher_outputs[0].item(), 2),
+                    "loss": round(loss.item(), 2),
+                }
+            )
 
             if args.wandb:
                 wandb.log(
