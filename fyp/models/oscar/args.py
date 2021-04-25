@@ -303,6 +303,12 @@ parser.add_argument(
     "--temperature", type=float, default=1, help="temperature in softmax for sampling"
 )
 parser.add_argument(
+    "--alpha", type=float, default=1, help="alpha for balancing losses"
+)
+parser.add_argument(
+    "--beta", type=float, default=1, help="beta for balancing losses"
+)
+parser.add_argument(
     "--top_k", type=int, default=0, help="filter distribution for sampling"
 )
 parser.add_argument(

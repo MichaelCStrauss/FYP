@@ -45,7 +45,6 @@ class HiddenLayerMSELoss(nn.Module):
     def __init__(self, teacher_hidden_dim, student_hidden_dim):
         super().__init__()
         self.mse_loss = nn.MSELoss()
-        self.transform = nn.Linear(student_hidden_dim, teacher_hidden_dim, bias=False)
 
     def forward(self, teacher_hiddens, student_hiddens, inputs):
         total_loss = torch.tensor(0, dtype=torch.float32).cuda()
@@ -53,18 +52,19 @@ class HiddenLayerMSELoss(nn.Module):
             masked_pos = inputs["masked_pos"]
             num_features = inputs["img_feats"].shape[1]
 
-            teacher_hidden = teacher_hiddens[i * 3 - 1]
+            teacher_hidden = teacher_hiddens[i * 3]
             student_hidden = student_hiddens[i]
 
-            # teacher_hidden = teacher_hidden[:, num_features:, :]
-            # student_hidden = student_hidden[:, num_features:, :]
+            teacher_hidden = teacher_hidden[:, num_features:, :]
+            student_hidden = student_hidden[:, num_features:, :]
 
-            # teacher_hidden = teacher_hidden[masked_pos == 1, :]
-            # student_hidden = student_hidden[masked_pos == 1, :]
+            teacher_hidden = teacher_hidden[masked_pos == 1, :]
+            student_hidden = student_hidden[masked_pos == 1, :]
 
-            transformed_student = self.transform(student_hidden)
+            teacher_normalised = teacher_hidden / teacher_hidden.norm(dim=1)[:, None]
+            student_normalised = student_hidden / student_hidden.norm(dim=1)[:, None]
 
-            total_loss += self.mse_loss(transformed_student, teacher_hidden)
+            total_loss += self.mse_loss(student_normalised, teacher_normalised)
         return total_loss
 
 
@@ -315,10 +315,11 @@ def main():
                 student_outputs[1],
                 teacher_outputs[1],
                 masked_ids,
-                1,
+                args.temperature,
+                args.alpha,
             )
 
-            loss = h_loss + o_loss
+            loss = h_loss + args.beta * o_loss
 
             epoch_loss += loss.item() / num_steps
 
