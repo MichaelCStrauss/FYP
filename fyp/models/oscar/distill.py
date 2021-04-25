@@ -48,12 +48,15 @@ class HiddenLayerMSELoss(nn.Module):
 
     def forward(self, teacher_hiddens, student_hiddens, inputs):
         total_loss = torch.tensor(0, dtype=torch.float32).cuda()
-        for i in range(1, len(student_hiddens)):
+        student_hidden_layer_indices = list(range(1, len(student_hiddens)))
+        teacher_hidden_layer_indices = [3 * x for x in student_hidden_layer_indices]
+        teacher_hidden_layer_indices[-1] -= 1
+        for s, t in zip(student_hidden_layer_indices, teacher_hidden_layer_indices):
             masked_pos = inputs["masked_pos"]
             num_features = inputs["img_feats"].shape[1]
 
-            teacher_hidden = teacher_hiddens[i * 3]
-            student_hidden = student_hiddens[i]
+            teacher_hidden = teacher_hiddens[t]
+            student_hidden = student_hiddens[s]
 
             teacher_hidden = teacher_hidden[:, num_features:, :]
             student_hidden = student_hidden[:, num_features:, :]
