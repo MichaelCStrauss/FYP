@@ -54,14 +54,14 @@ class HiddenLayerMSELoss(nn.Module):
             teacher_masked_pos = teacher_inputs["masked_pos"]
             student_masked_pos = student_inputs["masked_pos"]
 
-            teacher_hidden = teacher_hiddens[i * 3 - 1]
+            teacher_hidden = teacher_hiddens[i * 3]
             student_hidden = student_hiddens[i]
 
-            teacher_hidden = teacher_hidden[:, num_features:, :]
-            student_hidden = student_hidden[:, num_features:, :]
+            # teacher_hidden = teacher_hidden[:, num_features:, :]
+            # student_hidden = student_hidden[:, num_features:, :]
 
-            teacher_hidden = teacher_hidden[teacher_masked_pos == 1, :]
-            student_hidden = student_hidden[student_masked_pos == 1, :]
+            # teacher_hidden = teacher_hidden[teacher_masked_pos == 1, :]
+            # student_hidden = student_hidden[student_masked_pos == 1, :]
 
             transformed_student = self.transform(student_hidden)
 
@@ -230,7 +230,7 @@ def main():
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=args.num_workers,
+        num_workers=1,
         sampler=torch.utils.data.sampler.RandomSampler(dataset),
         batch_size=1,
         pin_memory=True,
@@ -287,9 +287,8 @@ def main():
         epoch_loss, epoch_acc = 0.0, 0.0
         num_steps = len(data_loader)
         print(num_steps)
-        for step, (img_keys, teacher_batch, student_batch) in tqdm(
-            enumerate(data_loader)
-        ):
+        pbar = tqdm(data_loader)
+        for step, (img_keys, teacher_batch, student_batch) in enumerate(pbar):
             global_step += 1
             teacher_batch = tuple(t.to(args.device) for t in teacher_batch)
             student_batch = tuple(t.to(args.device) for t in student_batch)
@@ -305,8 +304,6 @@ def main():
                 "masked_pos": teacher_batch[4],
                 "masked_ids": teacher_batch[5],
             }
-            teacher_masked_ids = teacher_inputs["masked_ids"]
-            teacher_masked_ids = teacher_masked_ids[teacher_masked_ids != 0]
 
             student_inputs = {
                 "input_ids": student_batch[0],
@@ -316,10 +313,16 @@ def main():
                 "masked_pos": student_batch[4],
                 "masked_ids": student_batch[5],
             }
-            student_masked_ids = student_inputs["masked_ids"]
-            student_masked_ids = student_masked_ids[student_masked_ids != 0]
 
-            teacher_outputs = teacher_model(**teacher_inputs)
+            print(teacher_inputs['input_ids'])
+            print(teacher_inputs['masked_ids'])
+            print(teacher_inputs['masked_pos'])
+            print(student_inputs['input_ids'])
+            print(student_inputs['masked_ids'])
+            print(student_inputs['masked_pos'])
+
+            with torch.no_grad():
+                teacher_outputs = teacher_model(**teacher_inputs)
             student_outputs = student_model(**student_inputs)
 
             loss = hidden_loss(
@@ -336,14 +339,17 @@ def main():
 
             loss.backward()
 
-            scheduler.step()
             optimizer.step()
+            scheduler.step()
             student_model.zero_grad()
 
-            if step % 1000 == 0:
-                print(f"Teacher loss: {teacher_outputs[0]}")
-                print(f"Student loss: {student_outputs[0]}")
-                print(f"KD Loss: {loss}")
+            pbar.set_postfix(
+                {
+                    "student_loss": round(student_outputs[0].item(), 2),
+                    "teacher_loss": round(teacher_outputs[0].item(), 2),
+                    "loss": round(loss.item(), 2),
+                }
+            )
 
             if args.wandb:
                 wandb.log(

@@ -265,14 +265,21 @@ class CaptionTSVDataset(Dataset):
 
         masked_ids = teacher_example[5]
 
-        expanded = torch.tensor(
-            self.student_tokenizer.encode(self.teacher_tokenizer.decode(masked_ids.tolist()))
-        )
+        expanded = []
+        for id in masked_ids:
+            expanded.append(
+                self.student_tokenizer.encode(
+                    self.teacher_tokenizer.decode([id.item()])
+                )
+            )
+        expanded = [x for y in expanded for x in y]
+        expanded = torch.tensor(expanded).squeeze()
         no_pad_ex = expanded[expanded != 0]
         idxs = (s_input_ids[..., None] == no_pad_ex).any(-1).nonzero().squeeze()
         s_input_ids[idxs] = 103
 
         student_example[4][idxs] = 1
+        student_example = (*student_example[:5], expanded)
         return img_key, teacher_example, student_example
 
     def __len__(self):
