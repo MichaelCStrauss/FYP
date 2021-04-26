@@ -231,9 +231,9 @@ def main():
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=1,
+        num_workers=args.num_workers,
         sampler=torch.utils.data.sampler.RandomSampler(dataset),
-        batch_size=1,
+        batch_size=args.per_gpu_train_batch_size,
         pin_memory=True,
     )
 

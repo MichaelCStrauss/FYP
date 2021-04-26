@@ -181,6 +181,7 @@ class CaptionTSVDataset(Dataset):
             0,
             is_train=is_train,
         )
+        self.max_masked_tokens = max_masked_tokens
         self.add_od_labels = add_od_labels
         self.is_train = is_train
         self.kwargs = kwargs
@@ -276,6 +277,9 @@ class CaptionTSVDataset(Dataset):
             else:
                 expanded.append(s)
         expanded = [x for x in expanded if x in s_input_ids]
+        while len(expanded) < self.max_masked_tokens * 2:
+            expanded.append(0)
+        expanded = expanded[:self.max_masked_tokens*2]
         expanded = torch.tensor(expanded).squeeze()
         no_pad_ex = expanded[expanded != 0]
         idxs = (s_input_ids[..., None] == no_pad_ex).any(-1).nonzero().squeeze()
