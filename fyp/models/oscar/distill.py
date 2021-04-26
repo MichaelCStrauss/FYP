@@ -1,3 +1,4 @@
+import hashlib
 import torch
 import torch.utils.data
 import torch.nn as nn
@@ -45,28 +46,28 @@ class HiddenLayerMSELoss(nn.Module):
     def __init__(self, teacher_hidden_dim, student_hidden_dim):
         super().__init__()
         self.mse_loss = nn.MSELoss()
-        self.transform = nn.Linear(student_hidden_dim, teacher_hidden_dim, bias=False)
 
     def forward(self, teacher_hiddens, student_hiddens, teacher_inputs, student_inputs):
         total_loss = torch.tensor(0, dtype=torch.float32).cuda()
-        for i in range(1, len(student_hiddens)):
-            num_features = teacher_inputs["img_feats"].shape[1]
+        student_hidden_layer_indices = list(range(1, len(student_hiddens)))
+        teacher_hidden_layer_indices = [3 * x for x in student_hidden_layer_indices]
+        teacher_hidden_layer_indices[-1] -= 1
+        for s, t in zip(student_hidden_layer_indices, teacher_hidden_layer_indices):
             teacher_masked_pos = teacher_inputs["masked_pos"]
             student_masked_pos = student_inputs["masked_pos"]
+            num_features = teacher_inputs["img_feats"].shape[1]
 
-            teacher_hidden = teacher_hiddens[i * 3]
-            student_hidden = student_hiddens[i]
+            teacher_hidden = teacher_hiddens[t]
+            student_hidden = student_hiddens[s]
 
-            # teacher_hidden = teacher_hidden[:, num_features:, :]
-            # student_hidden = student_hidden[:, num_features:, :]
+            teacher_hidden = teacher_hidden[:, num_features:, :]
+            student_hidden = student_hidden[:, num_features:, :]
 
-            # teacher_hidden = teacher_hidden[teacher_masked_pos == 1, :]
-            # student_hidden = student_hidden[student_masked_pos == 1, :]
-
-            transformed_student = self.transform(student_hidden)
+            teacher_hidden = teacher_hidden[teacher_masked_pos == 1, :]
+            student_hidden = student_hidden[student_masked_pos == 1, :]
 
             teacher_mean = torch.mean(teacher_hidden, 0)
-            student_mean = torch.mean(transformed_student, 0)
+            student_mean = torch.mean(student_hidden, 0)
 
             total_loss += self.mse_loss(student_mean, teacher_mean)
         return total_loss
@@ -320,22 +321,32 @@ def main():
                 student_outputs = student_model(**student_inputs)
             except Exception as e:
                 print(e)
-                print(teacher_inputs['input_ids'])
-                print(teacher_tokenizer.convert_ids_to_tokens(teacher_inputs['input_ids'].tolist()[0]))
-                print(teacher_inputs['masked_ids'])
-                print(teacher_inputs['masked_pos'])
-                print(student_inputs['input_ids'])
-                print(student_tokenizer.convert_ids_to_tokens(student_inputs['input_ids'].tolist()[0]))
-                print(student_inputs['masked_ids'])
-                print(student_inputs['masked_pos'])
+                print(teacher_inputs["input_ids"])
+                print(
+                    teacher_tokenizer.convert_ids_to_tokens(
+                        teacher_inputs["input_ids"].tolist()[0]
+                    )
+                )
+                print(teacher_inputs["masked_ids"])
+                print(teacher_inputs["masked_pos"])
+                print(student_inputs["input_ids"])
+                print(
+                    student_tokenizer.convert_ids_to_tokens(
+                        student_inputs["input_ids"].tolist()[0]
+                    )
+                )
+                print(student_inputs["masked_ids"])
+                print(student_inputs["masked_pos"])
                 return
 
-            loss = hidden_loss(
+            h_loss = hidden_loss(
                 teacher_outputs[2],
                 student_outputs[2],
                 teacher_inputs,
                 student_inputs,
             )
+
+            loss = student_outputs[0] + args.beta * h_loss
             epoch_loss += loss.item() / num_steps
 
             torch.nn.utils.clip_grad_norm_(
@@ -361,6 +372,7 @@ def main():
                     {
                         "student_loss": student_outputs[0],
                         "teacher_loss": teacher_outputs[0],
+                        "hidden_loss": h_loss,
                         "loss": loss,
                     }
                 )
