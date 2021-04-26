@@ -267,12 +267,15 @@ class CaptionTSVDataset(Dataset):
 
         expanded = []
         for id in masked_ids:
-            expanded.append(
-                self.student_tokenizer.encode(
-                    self.teacher_tokenizer.decode([id.item()])
-                )
-            )
-        expanded = [x for y in expanded for x in y]
+            decoded = self.teacher_tokenizer.decode([id.item()])
+            s = self.student_tokenizer.convert_tokens_to_ids(decoded)
+            if s == 100:
+                s = self.student_tokenizer.encode(decoded.replace("#", ""))
+                for i in s:
+                    expanded.append(i)
+            else:
+                expanded.append(s)
+        expanded = [x for x in expanded if x in s_input_ids]
         expanded = torch.tensor(expanded).squeeze()
         no_pad_ex = expanded[expanded != 0]
         idxs = (s_input_ids[..., None] == no_pad_ex).any(-1).nonzero().squeeze()
@@ -360,6 +363,7 @@ class CaptionTensorizer(object):
             masked_pos = torch.zeros(self.max_seq_len, dtype=torch.int)
             # randomly mask words for prediction, ignore [CLS]
             candidate_masked_idx = list(range(1, seq_a_len))  # only mask text_a
+            candidate_masked_idx = [x for x in candidate_masked_idx if tokens[x][0] != '#']
             random.shuffle(candidate_masked_idx)
             num_masked = min(
                 max(round(self.mask_prob * seq_a_len), 1), self.max_masked_tokens
@@ -369,19 +373,21 @@ class CaptionTensorizer(object):
             masked_idx = sorted(masked_idx)
             masked_token = [tokens[i] for i in masked_idx]
             for pos in masked_idx:
-                if random.random() <= 0.8:
-                    # 80% chance to be a ['MASK'] token
-                    tokens[pos] = self.tokenizer.mask_token
-                elif random.random() <= 0.5:
-                    # 10% chance to be a random word ((1-0.8)*0.5)
-                    from random import randint
+                # FOR CONDENSED VOCAB: Just use a mask token
+                # if random.random() <= 0.8:
+                #     # 80% chance to be a ['MASK'] token
+                #     tokens[pos] = self.tokenizer.mask_token
+                # elif random.random() <= 0.5:
+                #     # 10% chance to be a random word ((1-0.8)*0.5)
+                #     from random import randint
 
-                    i = randint(0, len(self.tokenizer.vocab))
-                    self.tokenizer._convert_id_to_token(i)
-                    tokens[pos] = self.tokenizer._convert_id_to_token(i)
-                else:
-                    # 10% chance to remain the same (1-0.8-0.1)
-                    pass
+                #     i = randint(0, len(self.tokenizer.vocab))
+                #     self.tokenizer._convert_id_to_token(i)
+                #     tokens[pos] = self.tokenizer._convert_id_to_token(i)
+                # else:
+                #     # 10% chance to remain the same (1-0.8-0.1)
+                #     pass
+                tokens[pos] = self.tokenizer.mask_token
 
             masked_pos[masked_idx] = 1
             # pad masked tokens to the same length

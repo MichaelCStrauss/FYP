@@ -314,16 +314,21 @@ def main():
                 "masked_ids": student_batch[5],
             }
 
-            print(teacher_inputs['input_ids'])
-            print(teacher_inputs['masked_ids'])
-            print(teacher_inputs['masked_pos'])
-            print(student_inputs['input_ids'])
-            print(student_inputs['masked_ids'])
-            print(student_inputs['masked_pos'])
-
             with torch.no_grad():
                 teacher_outputs = teacher_model(**teacher_inputs)
-            student_outputs = student_model(**student_inputs)
+            try:
+                student_outputs = student_model(**student_inputs)
+            except Exception as e:
+                print(e)
+                print(teacher_inputs['input_ids'])
+                print(teacher_tokenizer.convert_ids_to_tokens(teacher_inputs['input_ids'].tolist()[0]))
+                print(teacher_inputs['masked_ids'])
+                print(teacher_inputs['masked_pos'])
+                print(student_inputs['input_ids'])
+                print(student_tokenizer.convert_ids_to_tokens(student_inputs['input_ids'].tolist()[0]))
+                print(student_inputs['masked_ids'])
+                print(student_inputs['masked_pos'])
+                return
 
             loss = hidden_loss(
                 teacher_outputs[2],
