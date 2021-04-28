@@ -181,6 +181,8 @@ class CaptionTSVDataset(Dataset):
             0,
             is_train=is_train,
         )
+        self.max_seq_a_length = max_seq_a_length
+        self.max_seq_length = max_seq_length
         self.max_masked_tokens = max_masked_tokens
         self.add_od_labels = add_od_labels
         self.is_train = is_train
@@ -279,11 +281,16 @@ class CaptionTSVDataset(Dataset):
         expanded = [x for x in expanded if x in s_input_ids]
         while len(expanded) < self.max_masked_tokens * 2:
             expanded.append(0)
-        expanded = expanded[:self.max_masked_tokens*2]
+        expanded = expanded[: self.max_masked_tokens * 2]
         expanded = torch.tensor(expanded).squeeze()
         no_pad_ex = expanded[expanded != 0]
-        idxs = (s_input_ids[..., None] == no_pad_ex).any(-1).nonzero().squeeze()
-        s_input_ids[idxs] = 103
+        idxs = (
+            (s_input_ids[: self.max_seq_a_length][..., None] == no_pad_ex)
+            .any(-1)
+            .nonzero()
+            .squeeze()
+        )
+        s_input_ids[: self.max_seq_a_length][idxs] = 103
 
         student_example[4][idxs] = 1
         student_example = (*student_example[:5], expanded)
@@ -367,7 +374,12 @@ class CaptionTensorizer(object):
             masked_pos = torch.zeros(self.max_seq_len, dtype=torch.int)
             # randomly mask words for prediction, ignore [CLS]
             candidate_masked_idx = list(range(1, seq_a_len))  # only mask text_a
-            candidate_masked_idx = [x for x in candidate_masked_idx if tokens[x][0] != '#']
+            candidate_masked_idx = [
+                x
+                for x in candidate_masked_idx
+                if tokens[x][0] != "#"
+                and self.tokenizer.convert_tokens_to_ids(tokens[x]) < 6000
+            ]
             random.shuffle(candidate_masked_idx)
             num_masked = min(
                 max(round(self.mask_prob * seq_a_len), 1), self.max_masked_tokens
