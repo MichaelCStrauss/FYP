@@ -16,8 +16,9 @@ import errno
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
+
 def load_from_yaml_file(yaml_file):
-    with open(yaml_file, 'r') as fp:
+    with open(yaml_file, "r") as fp:
         return yaml.load(fp)
 
 
@@ -32,13 +33,14 @@ def find_file_path_in_yaml(fname, root):
                 errno.ENOENT, os.strerror(errno.ENOENT), op.join(root, fname)
             )
 
+
 def generate_lineidx_file(filein, idxout):
-    idxout_tmp = idxout + '.tmp'
-    with open(filein, 'r') as tsvin, open(idxout_tmp,'w') as tsvout:
+    idxout_tmp = idxout + ".tmp"
+    with open(filein, "r") as tsvin, open(idxout_tmp, "w") as tsvout:
         fsize = os.fstat(tsvin.fileno()).st_size
         fpos = 0
-        while fpos!=fsize:
-            tsvout.write(str(fpos)+"\n")
+        while fpos != fsize:
+            tsvout.write(str(fpos) + "\n")
             tsvin.readline()
             fpos = tsvin.tell()
     os.rename(idxout_tmp, idxout)
@@ -47,10 +49,10 @@ def generate_lineidx_file(filein, idxout):
 class TSVFile(object):
     def __init__(self, tsv_file, generate_lineidx=False):
         self.tsv_file = tsv_file
-        self.lineidx = op.splitext(tsv_file)[0] + '.lineidx'
+        self.lineidx = op.splitext(tsv_file)[0] + ".lineidx"
         self._fp = None
         self._lineidx = None
-        # the process always keeps the process which opens the file. 
+        # the process always keeps the process which opens the file.
         # If the pid is not equal to the currrent pid, we will re-open the file.
         self.pid = None
         # generate lineidx if not exist
@@ -77,10 +79,10 @@ class TSVFile(object):
         try:
             pos = self._lineidx[idx]
         except:
-            logging.info('{}-{}'.format(self.tsv_file, idx))
+            logging.info("{}-{}".format(self.tsv_file, idx))
             raise
         self._fp.seek(pos)
-        return [s.strip() for s in self._fp.readline().split('\t')]
+        return [s.strip() for s in self._fp.readline().split("\t")]
 
     def __getitem__(self, index):
         return self.seek(index)
@@ -90,28 +92,29 @@ class TSVFile(object):
 
     def _ensure_lineidx_loaded(self):
         if self._lineidx is None:
-            logging.info('loading lineidx: {}'.format(self.lineidx))
-            with open(self.lineidx, 'r') as fp:
+            logging.info("loading lineidx: {}".format(self.lineidx))
+            with open(self.lineidx, "r") as fp:
                 self._lineidx = [int(i.strip()) for i in fp.readlines()]
 
     def _ensure_tsv_opened(self):
         if self._fp is None:
-            self._fp = open(self.tsv_file, 'r')
+            self._fp = open(self.tsv_file, "r")
             self.pid = os.getpid()
 
         if self.pid != os.getpid():
-            logging.info('re-open {} because the process id changed'.format(self.tsv_file))
-            self._fp = open(self.tsv_file, 'r')
+            logging.info(
+                "re-open {} because the process id changed".format(self.tsv_file)
+            )
+            self._fp = open(self.tsv_file, "r")
             self.pid = os.getpid()
-
-
 
 
 class CaptionTSVDataset(Dataset):
     def __init__(
         self,
         yaml_file,
-        tokenizer=None,
+        teacher_tokenizer=None,
+        student_tokenizer=None,
         add_od_labels=True,
         max_img_seq_length=50,
         max_seq_length=70,
@@ -145,7 +148,11 @@ class CaptionTSVDataset(Dataset):
         if add_od_labels:
             assert op.isfile(self.label_file)
         if is_train:
-            assert op.isfile(self.caption_file) and tokenizer is not None
+            assert (
+                op.isfile(self.caption_file)
+                and teacher_tokenizer is not None
+                and student_tokenizer is not None
+            )
 
         self.label_tsv = None if not self.label_file else TSVFile(self.label_file)
         self.feat_tsv = TSVFile(self.feat_file)
@@ -154,9 +161,19 @@ class CaptionTSVDataset(Dataset):
             with open(self.caption_file, "r") as f:
                 self.captions = json.load(f)
 
-        self.tokenizer = tokenizer
-        self.tensorizer = CaptionTensorizer(
-            self.tokenizer,
+        self.teacher_tokenizer = teacher_tokenizer
+        self.teacher_tensorizer = CaptionTensorizer(
+            self.teacher_tokenizer,
+            max_img_seq_length,
+            max_seq_length,
+            max_seq_a_length,
+            mask_prob,
+            max_masked_tokens,
+            is_train=is_train,
+        )
+        self.student_tokenizer = student_tokenizer
+        self.student_tensorizer = CaptionTensorizer(
+            self.student_tokenizer,
             max_img_seq_length,
             max_seq_length,
             max_seq_a_length,
@@ -238,8 +255,13 @@ class CaptionTSVDataset(Dataset):
         features = self.get_image_features(img_idx)
         caption = self.get_caption(idx)
         od_labels = self.get_od_labels(img_idx)
-        example = self.tensorizer.tensorize_example(caption, features, text_b=od_labels)
-        return img_key, example
+        teacher_example = self.teacher_tensorizer.tensorize_example(
+            caption, features, text_b=od_labels
+        )
+        student_example = self.student_tensorizer.tensorize_example(
+            caption, features, text_b=od_labels
+        )
+        return img_key, teacher_example, student_example
 
     def __len__(self):
         if self.is_train:

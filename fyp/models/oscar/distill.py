@@ -52,7 +52,6 @@ class HiddenLayerMSELoss(nn.Module):
         teacher_hidden_layer_indices = [3 * x for x in student_hidden_layer_indices]
         teacher_hidden_layer_indices[-1] -= 1
         for s, t in zip(student_hidden_layer_indices, teacher_hidden_layer_indices):
-            masked_pos = inputs["masked_pos"]
             num_features = inputs["img_feats"].shape[1]
 
             teacher_hidden = teacher_hiddens[t]
@@ -61,13 +60,14 @@ class HiddenLayerMSELoss(nn.Module):
             teacher_hidden = teacher_hidden[:, num_features:, :]
             student_hidden = student_hidden[:, num_features:, :]
 
-            teacher_hidden = teacher_hidden[masked_pos == 1, :]
-            student_hidden = student_hidden[masked_pos == 1, :]
-
             teacher_normalised = teacher_hidden / teacher_hidden.norm(dim=1)[:, None]
             student_normalised = student_hidden / student_hidden.norm(dim=1)[:, None]
 
-            total_loss += self.mse_loss(student_normalised, teacher_normalised)
+            teacher_mean = torch.mean(teacher_normalised, 0)
+            student_mean = torch.mean(student_normalised, 0)
+
+
+            total_loss += self.mse_loss(student_mean, teacher_mean)
         return total_loss
 
 
@@ -191,8 +191,12 @@ def main():
     if args.wandb:
         wandb.init(config=args)
 
-    tokenizer = BertTokenizer.from_pretrained(
+    teacher_tokenizer = BertTokenizer.from_pretrained(
         args.teacher_model_name_or_path,
+        do_lower_case=args.do_lower_case,
+    )
+    student_tokenizer = BertTokenizer.from_pretrained(
+        args.student_model_name_or_path,
         do_lower_case=args.do_lower_case,
     )
 
@@ -212,7 +216,8 @@ def main():
 
     dataset = CaptionTSVDataset(
         yaml_file,
-        tokenizer=tokenizer,
+        teacher_tokenizer=teacher_tokenizer,
+        student_tokenizer=student_tokenizer,
         add_od_labels=args.add_od_labels,
         max_img_seq_length=args.max_img_seq_length,
         max_seq_length=args.max_seq_length,
@@ -289,40 +294,45 @@ def main():
         num_steps = len(data_loader)
         print(num_steps)
         pbar = tqdm(data_loader)
-        for step, (img_keys, batch) in enumerate(pbar):
+        for step, (img_keys, teacher_batch, student_batch) in enumerate(pbar):
             global_step += 1
-            batch = tuple(t.to(args.device) for t in batch)
+            teacher_batch = tuple(t.to(args.device) for t in teacher_batch)
+            student_batch = tuple(t.to(args.device) for t in student_batch)
 
             teacher_model.eval()
             student_model.train()
-            inputs = {
-                "input_ids": batch[0],
-                "attention_mask": batch[1],
-                "token_type_ids": batch[2],
-                "img_feats": batch[3],
-                "masked_pos": batch[4],
-                "masked_ids": batch[5],
+            teacher_inputs = {
+                "input_ids": teacher_batch[0],
+                "attention_mask": teacher_batch[1],
+                "token_type_ids": teacher_batch[2],
+                "img_feats": teacher_batch[3],
+                "masked_pos": teacher_batch[4],
+                "masked_ids": teacher_batch[5],
             }
-            masked_ids = inputs["masked_ids"]
-            masked_ids = masked_ids[masked_ids != 0]
+            teacher_masked_ids = teacher_inputs["masked_ids"]
+            teacher_masked_ids = teacher_masked_ids[teacher_masked_ids != 0]
+
+            student_inputs = {
+                "input_ids": student_batch[0],
+                "attention_mask": student_batch[1],
+                "token_type_ids": student_batch[2],
+                "img_feats": student_batch[3],
+                "masked_pos": student_batch[4],
+                "masked_ids": student_batch[5],
+            }
+            student_masked_ids = student_inputs["masked_ids"]
+            student_masked_ids = student_masked_ids[student_masked_ids != 0]
             with torch.no_grad():
-                teacher_outputs = teacher_model(**inputs)
-            student_outputs = student_model(**inputs)
+                teacher_outputs = teacher_model(**teacher_inputs)
+            student_outputs = student_model(**student_inputs)
 
             h_loss = hidden_loss(
                 teacher_outputs[2],
                 student_outputs[2],
-                inputs,
-            )
-            o_loss = output_loss(
-                student_outputs[1],
-                teacher_outputs[1],
-                masked_ids,
-                args.temperature,
-                args.alpha,
+                teacher_inputs,
             )
 
-            loss = h_loss + args.beta * o_loss
+            loss = h_loss + args.beta * student_outputs[0]
 
             epoch_loss += loss.item() / num_steps
 
@@ -350,7 +360,6 @@ def main():
                         "student_loss": student_outputs[0],
                         "teacher_loss": teacher_outputs[0],
                         "hidden_loss": h_loss,
-                        "output_loss": o_loss,
                         "loss": loss,
                     }
                 )
@@ -363,7 +372,7 @@ def main():
                 step=global_step,
             )
 
-        save_checkpoint(student_model, tokenizer, args, epoch, num_steps)
+        save_checkpoint(student_model, student_tokenizer, args, epoch, num_steps)
 
 
 if __name__ == "__main__":
