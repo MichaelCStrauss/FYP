@@ -45,6 +45,7 @@ class HiddenLayerMSELoss(nn.Module):
     def __init__(self, teacher_hidden_dim, student_hidden_dim):
         super().__init__()
         self.mse_loss = nn.MSELoss()
+        self.projection = nn.Linear(student_hidden_dim, teacher_hidden_dim)
 
     def forward(self, teacher_hiddens, student_hiddens, inputs):
         total_loss = torch.tensor(0, dtype=torch.float32).cuda()
@@ -66,8 +67,9 @@ class HiddenLayerMSELoss(nn.Module):
 
             teacher_normalised = teacher_hidden / teacher_hidden.norm(dim=1)[:, None]
             student_normalised = student_hidden / student_hidden.norm(dim=1)[:, None]
+            student_normalised_projected = self.projection(student_normalised)
 
-            total_loss += self.mse_loss(student_normalised, teacher_normalised)
+            total_loss += self.mse_loss(student_normalised_projected, teacher_normalised)
         return total_loss
 
 
